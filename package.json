@@ -1,7 +1,7 @@
 {
   "name": "prompt-shelf",
-  "version": "0.1.0",
-  "description": "Stash prompts for later in Claude Code and Codex CLI: Ctrl+F to stash a half-typed prompt, Ctrl+Q to bring it back. Multi-slot, persistent, per repo.",
+  "version": "0.1.1",
+  "description": "Stash multiple prompts for later in Claude Code and Codex CLI: Ctrl+F to park a draft, Ctrl+Q to bring it back. Persistent, per repo.",
   "type": "module",
   "license": "MIT",
   "author": "Sourabh Shegane (https://github.com/sourabhshegane)",
