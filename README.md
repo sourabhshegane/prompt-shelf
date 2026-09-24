@@ -18,12 +18,12 @@ the session.
 
 | | Claude `Ctrl+S` | prompt-shelf |
 | --- | --- | --- |
-| Slots | 1 | as many as you want |
+| Drafts it holds | 1 | as many as you want |
 | Survives closing the session | no | yes |
 | Shared across repos | no | yes, filtered to the current repo by default |
 | Search | no | yes (`/` in the list) |
-| Long pastes | – | saved in full |
-| Works in Codex CLI | – | yes |
+
+The same keys work in Codex CLI too, and both agents share one shelf.
 
 ## Install
 

@@ -22,14 +22,17 @@ const READ_PER_WORD = 0.32;
 const READ_MIN = 4;
 const readingTime = (text) => Math.max(READ_MIN, READ_BASE + [text].flat().join(' ').split(/\s+/).filter(Boolean).length * READ_PER_WORD);
 const AMBER = '\x1b[1;38;5;214m';
-const GRAY = '\x1b[38;5;245m';
+const WHITE = '\x1b[38;5;255m'; // second line: as readable as the first, just not bold
 const CAPTION_ROWS = 3; // caption line, smaller line, one row of space above the action
 const DIM = 0.65; // how much the area above the action is darkened while a caption shows
 const BACKGROUND = '0x121314'; // agg's asciinema theme background, keyed out of the captions
 // The caption's own rows get a solid band in the dimmed background colour, so it never sits on text.
 const BAND = '0x060707';
-const ZOOM = 1.6;
-const ZOOM_EASE = 0.6; // seconds to zoom in or out
+// Zoom per caption: close on the prompt, less while the stash list is open so its full width
+// (entry, agent and repo) stays in view, none for the first and last caption.
+const ZOOM_PROMPT = 1.6;
+const ZOOM_LIST = 1.25;
+const ZOOM_EASE = 0.6; // seconds to move from one zoom level to the next
 const MIN_BLOCK_TOP = 6; // below the agent's banner
 const RESET = '\x1b[0m';
 // Keys and the install command stand out in the caption.
@@ -105,14 +108,19 @@ const replay = new xterm.Terminal({ cols: width, rows: height, allowProposedApi:
 // Each screen state lasts until the next output event; the agent's start-up screen (nothing at
 // the bottom yet) doesn't count.
 const tops = captions.map(() => height);
+const showsList = captions.map(() => false);
 const frames = output.map((line) => JSON.parse(line));
 for (const [i, [t, , data]] of frames.entries()) {
   await new Promise((r) => replay.write(data, r));
   const top = bottomBlockTop(replay);
   if (top < MIN_BLOCK_TOP) continue;
   const until = frames[i + 1]?.[0] ?? end;
+  const listOpen = /stash · /.test(Array.from({ length: height }, (_, y) => replay.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n'));
   captions.forEach((c, k) => {
-    if (t < c.end && until > c.start) tops[k] = Math.min(tops[k], top);
+    if (t < c.end && until > c.start) {
+      tops[k] = Math.min(tops[k], top);
+      if (listOpen) showsList[k] = true;
+    }
   });
 }
 captions.forEach((c, i) => {
@@ -124,7 +132,7 @@ const indent = () => '  ';
 const captionEvents = [[0, 'o', '\x1b[?25l']];
 for (const c of captions) {
   const [line, sub = ''] = [c.text].flat();
-  captionEvents.push([c.start, 'o', `\x1b[2J\x1b[1;1H${indent()}\x1b[1m${highlight(line)}${RESET}\x1b[2;1H${indent()}${GRAY}${sub}${RESET}`]);
+  captionEvents.push([c.start, 'o', `\x1b[2J\x1b[1;1H${indent()}\x1b[1m${highlight(line)}${RESET}\x1b[2;1H${indent()}${WHITE}${highlight(sub).replaceAll('\x1b[1m', WHITE)}${RESET}`]);
 }
 captionEvents.push([now, 'o', '']);
 const casts = {
@@ -150,12 +158,15 @@ const dims = captions
     ];
   })
   .join(',');
-// One zoom from the second caption to the end of the second-last, easing in and out.
-const [zoomFrom, zoomTo] = [captions[1]?.start, captions.at(-2)?.end];
-const zoomExpr =
-  captions.length > 2
-    ? `1+${ZOOM - 1}*if(between(it,${zoomFrom.toFixed(2)},${zoomTo.toFixed(2)}),min(1,min((it-${zoomFrom.toFixed(2)})/${ZOOM_EASE},(${zoomTo.toFixed(2)}-it)/${ZOOM_EASE})),0)`
-    : '1';
+// Each caption eases from the previous caption's zoom level to its own.
+const levels = captions.map((c, i) => (i === 0 || i === captions.length - 1 ? 1 : showsList[i] ? ZOOM_LIST : ZOOM_PROMPT));
+// Built so the latest caption that has started is checked first.
+const zoomExpr = captions.reduce((rest, c, i) => {
+  const from = i === 0 ? 1 : levels[i - 1];
+  const s0 = c.start.toFixed(2);
+  const level = `${from}+${(levels[i] - from).toFixed(3)}*min(1,(it-${s0})/${ZOOM_EASE})`;
+  return `if(gte(it,${s0}),${level},${rest})`;
+}, '1');
 const [W, H] = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', join(work, 'term.gif')]).toString().trim().split(',').map(Number);
 // zoompan works on the 2x-upscaled frame to avoid jitter from whole-pixel steps.
 const zoom = `scale=${W * 2}:${H * 2}:flags=lanczos,zoompan=z='${zoomExpr}':x='0':y='ih-ih/zoom':d=1:s=${W}x${H}:fps=10`;
