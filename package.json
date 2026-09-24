@@ -1,6 +1,6 @@
 {
   "name": "prompt-shelf",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Stash multiple prompts for later in Claude Code and Codex CLI: Ctrl+F to park a draft, Ctrl+Q to bring it back. Persistent, per repo.",
   "type": "module",
   "license": "MIT",
@@ -60,7 +60,8 @@
   "dependencies": {
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/headless": "^6.0.0",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "prompt-shelf": "^0.1.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

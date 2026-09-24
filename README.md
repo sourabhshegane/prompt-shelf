@@ -12,6 +12,26 @@ Press `Ctrl+F` to put the draft on the shelf, say what matters now, and press
 `Ctrl+Q` to bring the draft back when you're ready. **Keep as many drafts on
 the shelf as you like**, and they survive closing the session.
 
+## Install
+
+**Homebrew** (macOS):
+
+```bash
+brew install sourabhshegane/tap/prompt-shelf
+stash enable
+```
+
+**npm**, with **`-g`** (not the `npm i prompt-shelf` shown on the npm page, which
+only adds it to the current folder):
+
+```bash
+npm i -g prompt-shelf
+```
+
+Then **open a new terminal tab** and run `claude` or `codex` as usual.
+`Ctrl+F` stashes a draft, `Ctrl+Q` brings it back. `stash doctor` checks the
+setup: it should say `on PATH: yes` and `claude: shim installed`.
+
 ![park a half-written prompt with Ctrl+F, bring it back with Ctrl+Q](docs/demo/demo.gif)
 
 ## Why not Claude Code's `Ctrl+S`?
@@ -25,24 +45,14 @@ the shelf as you like**, and they survive closing the session.
 
 The same keys work in Codex CLI too, and both agents share one shelf.
 
-## Install
+## What install changes
 
-```bash
-npm i -g prompt-shelf
-```
-
-- **Use `-g`.** Without it, npm installs prompt-shelf into the current folder
-  and nothing changes for `claude` or `codex`.
-- **Open a new terminal tab**, then run `claude` or `codex` exactly as you always
-  have. Tabs that were already open won't pick it up.
-- Check it with `stash doctor`: it should say `on PATH: yes` and
-  `claude: shim installed`.
-
-Requires Node 20 or newer. Installing puts a small `claude` / `codex` shim in
-`~/.prompt-shelf/bin/` and adds that folder to the front of your PATH with one
-marked line in your shell rc file (`~/.zshrc`, `~/.bashrc` or
-`~/.config/fish/config.fish`). All of the agent's own arguments still work,
-e.g. `claude --resume`.
+It puts a small `claude` / `codex` shim in `~/.prompt-shelf/bin/` and adds that
+folder to the front of your PATH with one marked line in your shell rc file
+(`~/.zshrc`, `~/.bashrc` or `~/.config/fish/config.fish`). With npm this
+happens during install; with Homebrew, `stash enable` does it. All of the
+agent's own arguments still work, e.g. `claude --resume`. Requires Node 20 or
+newer (Homebrew installs it for you).
 
 ## Keys
 
@@ -100,7 +110,8 @@ stash hotkey           # show both
 | What you see | Fix |
 | --- | --- |
 | `Ctrl+F` does nothing | You're in a tab or an agent session that was open before you installed. Open a new tab and start `claude` again. |
-| `stash: command not found` | It was installed without `-g`. Run `npm i -g prompt-shelf` (and `npm rm prompt-shelf` in the folder where you ran it without `-g`). |
+| `stash: command not found` | It was installed without `-g`. Run `npm i -g prompt-shelf` (and `npm rm prompt-shelf` in the folder where you ran it without `-g`), or use Homebrew. |
+| Installed with Homebrew but `Ctrl+F` does nothing | Run `stash enable` once, then open a new tab. |
 | `stash doctor` says `on PATH: no` | Add the line it prints to your shell rc file and open a new tab. |
 | `stash doctor` says `claude: shim missing` | Claude Code wasn't on your PATH when you installed. Run `stash enable`. |
 | Your terminal already uses `Ctrl+F` or `Ctrl+Q` | Pick other keys: `stash hotkey f2`, `stash hotkey list f3`. |
@@ -109,8 +120,9 @@ stash hotkey           # show both
 ## Uninstall
 
 ```bash
-stash disable          # optional: removes the shims and the PATH line
-npm rm -g prompt-shelf
+stash disable                         # removes the shims and the PATH line
+brew uninstall prompt-shelf           # if you used Homebrew
+npm rm -g prompt-shelf                # if you used npm
 ```
 
 Skipping `stash disable` is fine: the shims fall through to the real
