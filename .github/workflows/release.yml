@@ -1,0 +1,53 @@
+name: Release
+
+# Push a tag that matches package.json (e.g. v0.1.1) to publish to npm and create the
+# GitHub release. Publishing uses npm trusted publishing (OIDC): no token or OTP needed.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: Test, publish & create release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract tag name
+        id: tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
+
+      - run: npm ci
+
+      - name: Verify version matches tag
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION=${{ steps.tag.outputs.TAG }}
+          if [ "$PKG_VERSION" != "${TAG_VERSION#v}" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION)"
+            exit 1
+          fi
+
+      # prepublishOnly runs typecheck, tests and build before publishing.
+      - name: Publish to npm (OIDC trusted publishing)
+        run: npm publish
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.tag.outputs.TAG }}
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.tag.outputs.TAG, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

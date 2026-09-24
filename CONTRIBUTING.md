@@ -60,6 +60,17 @@ read its input box on screen.
 - Match the style of the code around your change.
 - Say which terminal and agent version you tested with.
 
+## Releasing (maintainers)
+
+Publishing is automated with npm trusted publishing, so no npm token or OTP is
+needed:
+
+1. Bump `version` in `package.json` (and `package-lock.json`) and push to `main`.
+2. Tag it and push the tag: `git tag v0.1.2 && git push origin v0.1.2`.
+
+The Release workflow checks the tag matches `package.json`, runs typecheck,
+tests and build, publishes to npm and creates the GitHub release.
+
 ## Code of conduct
 
 Be kind and assume good intent. Harassment isn't tolerated.
