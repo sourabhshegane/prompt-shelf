@@ -14,7 +14,7 @@ import {
 } from "./chunk-5VLKRCFM.js";
 
 // src/cli.ts
-import { createRequire } from "module";
+import { createRequire as createRequire2 } from "module";
 
 // src/config.ts
 import { homedir } from "os";
@@ -219,7 +219,7 @@ var Store = class {
 import { spawn as spawn2 } from "child_process";
 import { writeFile as writeFile3 } from "fs/promises";
 import { constants as osConstants } from "os";
-import { join as join3 } from "path";
+import { join as join4 } from "path";
 
 // src/core/screen.ts
 import xterm from "@xterm/headless";
@@ -277,8 +277,31 @@ var Screen = class {
 };
 
 // src/core/pty.ts
+import { accessSync, chmodSync, constants, existsSync as existsSync2, readdirSync } from "fs";
+import { createRequire } from "module";
+import { dirname as dirname4, join as join3 } from "path";
 import * as nodePty from "node-pty";
+var helperChecked = false;
+function ensureSpawnHelperExecutable() {
+  if (helperChecked || process.platform === "win32") return;
+  helperChecked = true;
+  try {
+    const prebuilds = join3(dirname4(createRequire(import.meta.url).resolve("node-pty/package.json")), "prebuilds");
+    if (!existsSync2(prebuilds)) return;
+    for (const entry of readdirSync(prebuilds)) {
+      const helper = join3(prebuilds, entry, "spawn-helper");
+      if (!existsSync2(helper)) continue;
+      try {
+        accessSync(helper, constants.X_OK);
+      } catch {
+        chmodSync(helper, 493);
+      }
+    }
+  } catch {
+  }
+}
 function spawnAgent(opts) {
+  ensureSpawnHelperExecutable();
   const child = nodePty.spawn(opts.command, opts.args, {
     name: process.env.TERM ?? "xterm-256color",
     cols: opts.cols,
@@ -765,7 +788,7 @@ async function runApp(opts) {
   const onProcessError = (err) => toast(`error: ${describeError(err)}`);
   const recordFrame = async () => {
     await screen.write("");
-    const file = join3(stashDir, `record-${adapter.name}-${Date.now()}.txt`);
+    const file = join4(stashDir, `record-${adapter.name}-${Date.now()}.txt`);
     await writeFile3(file, screen.lines().join("\n") + `
 --- cursor ${JSON.stringify(screen.cursor())}
 `);
@@ -908,9 +931,9 @@ async function runApp(opts) {
 }
 
 // src/cli.ts
-import { existsSync as existsSync2 } from "fs";
-import { basename as basename2, join as join4 } from "path";
-var { version } = createRequire(import.meta.url)("../package.json");
+import { existsSync as existsSync3 } from "fs";
+import { basename as basename2, join as join5 } from "path";
+var { version } = createRequire2(import.meta.url)("../package.json");
 function parseArgs(argv) {
   let record = false;
   const rest = [...argv];
@@ -1042,7 +1065,7 @@ async function main(argv) {
       const onPath = shimDirOnPath();
       const lines = [`shim dir: ${shimDir}`, `on PATH: ${onPath ? "yes" : "no"}`];
       for (const name of adapterNames) {
-        const shimmed = existsSync2(join4(shimDir, name)) || existsSync2(join4(shimDir, `${name}.cmd`));
+        const shimmed = existsSync3(join5(shimDir, name)) || existsSync3(join5(shimDir, `${name}.cmd`));
         lines.push(`${name}: shim ${shimmed ? "installed" : "missing"}, real binary ${findRealBinary(name) ?? "not found"}`);
       }
       if (!onPath) lines.push(`fix: ${pathHint()}`);

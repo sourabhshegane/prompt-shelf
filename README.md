@@ -21,11 +21,17 @@ brew install sourabhshegane/tap/prompt-shelf
 stash enable
 ```
 
+**One-line installer** (uses npm under the hood):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sourabhshegane/prompt-shelf/main/install.sh | sh
+```
+
 **npm**, with **`-g`** (not the `npm i prompt-shelf` shown on the npm page, which
 only adds it to the current folder):
 
 ```bash
-npm i -g prompt-shelf
+npm i -g prompt-shelf && stash enable
 ```
 
 Then **open a new terminal tab** and run `claude` or `codex` as usual.
@@ -47,12 +53,12 @@ The same keys work in Codex CLI too, and both agents share one shelf.
 
 ## What install changes
 
-It puts a small `claude` / `codex` shim in `~/.prompt-shelf/bin/` and adds that
-folder to the front of your PATH with one marked line in your shell rc file
-(`~/.zshrc`, `~/.bashrc` or `~/.config/fish/config.fish`). With npm this
-happens during install; with Homebrew, `stash enable` does it. All of the
-agent's own arguments still work, e.g. `claude --resume`. Requires Node 20 or
-newer (Homebrew installs it for you).
+`stash enable` puts a small `claude` / `codex` shim in `~/.prompt-shelf/bin/`
+and adds that folder to the front of your PATH with one marked line in your
+shell rc file (`~/.zshrc`, `~/.bashrc` or `~/.config/fish/config.fish`).
+Running it again is harmless. All of the agent's own arguments still work,
+e.g. `claude --resume`. Requires Node 20 or newer (Homebrew installs it for
+you).
 
 ## Keys
 
