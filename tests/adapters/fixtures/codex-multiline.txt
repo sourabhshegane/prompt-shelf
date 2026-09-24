@@ -1,0 +1,6 @@
+• Working (12s • esc to interrupt)
+
+› add a retry to the upload client
+  and also log the attempt count
+
+  gpt-5-codex  ·  ~/proj  ·  95% context left

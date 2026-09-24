@@ -1,0 +1,7 @@
+● Working on the refactor…
+
+───────────────────────────────────────────────────────────
+> add a retry to the upload client
+  and also log the attempt count
+───────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)

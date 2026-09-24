@@ -1,0 +1,71 @@
+{
+  "name": "prompt-shelf",
+  "version": "0.1.0",
+  "description": "Stash prompts for later in Claude Code and Codex CLI: Ctrl+F to stash a half-typed prompt, Ctrl+Q to bring it back. Multi-slot, persistent, per repo.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Sourabh Shegane (https://github.com/sourabhshegane)",
+  "homepage": "https://github.com/sourabhshegane/prompt-shelf#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sourabhshegane/prompt-shelf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sourabhshegane/prompt-shelf/issues"
+  },
+  "bin": {
+    "stash": "bin/stash.js"
+  },
+  "keywords": [
+    "prompt-library",
+    "prompt-shelf",
+    "claude-code",
+    "claude",
+    "anthropic",
+    "codex",
+    "openai-codex",
+    "coding-agent",
+    "ai-agent",
+    "ai-coding",
+    "prompt",
+    "prompt-stash",
+    "prompt-queue",
+    "stash",
+    "clipboard",
+    "terminal",
+    "tui",
+    "cli",
+    "pty",
+    "developer-tools",
+    "productivity"
+  ],
+  "files": [
+    "bin",
+    "dist",
+    "scripts",
+    "README.md",
+    "docs/install"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "node scripts/postinstall.js",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.6.0",
+    "vitest": "^5.0.1"
+  }
+}

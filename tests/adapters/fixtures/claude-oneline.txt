@@ -1,0 +1,6 @@
+● Working on the refactor…
+
+───────────────────────────────────────────────────────────
+> add a retry to the upload client
+───────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)
