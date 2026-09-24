@@ -1,17 +1,17 @@
 # Roadmap
 
-Rough order, not promises. Want one of these sooner, or have a different idea?
-Open an issue.
+Rough order, not promises. Each item has an issue: 👍 the ones you want most,
+or open a new issue with a different idea.
 
 ## Next
 
-- **Prompt library with groups.** The stash is for things you'll use once. A
+- **Prompt library with groups.** ([#1](https://github.com/sourabhshegane/prompt-shelf/issues/1)) The stash is for things you'll use once. A
   library would hold prompts you reuse, sorted into groups you name, like
   `Skills`, `Features` or `Common prompts`. Picking one from the library adds
   it to the box and keeps it there. The list gets two tabs: Stash and Library.
   You could also move a stash entry into a group once you know you'll need it
   again.
-- **Choose what the list shows.** Today the list opens on the current git
+- **Choose what the list shows.** ([#2](https://github.com/sourabhshegane/prompt-shelf/issues/2)) Today the list opens on the current git
   repo's entries and `Tab` shows everything. A setting (and more `Tab` stops)
   would let you pick the default:
   - **per session**: only what you stashed in this Claude/Codex session
@@ -19,18 +19,12 @@ Open an issue.
   - **per branch**: the current repo and git branch
   - **per agent**: only Claude's or only Codex's entries
   - **everything**: all entries on this machine
-- **Linux testing.** It should work already; it just hasn't been checked on a
-  real machine.
 
 ## Later
 
-- **More agents.** Gemini CLI, Aider, OpenCode and others. Each one needs a
+- **More agents.** ([#4](https://github.com/sourabhshegane/prompt-shelf/issues/4)) Gemini CLI, Aider, OpenCode and others. Each one needs a
   small adapter that knows what its input box looks like (see
   [CONTRIBUTING.md](CONTRIBUTING.md#adding-an-agent)).
-- **Windows.** The shims are written as `.cmd` files but nothing has been
-  tested there.
-- **Export and import.** Move your stash and library between machines, or
-  share a library with a team.
 
 ## Done
 

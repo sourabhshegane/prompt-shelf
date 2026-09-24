@@ -106,8 +106,6 @@ Skipping `stash disable` is fine: the shims fall through to the real
 | --- | --- |
 | Claude Code | Tested on macOS |
 | Codex CLI | Tested on macOS |
-| Linux | Should work, not tested yet |
-| Windows | Not tested |
 
 ## How it works
 
