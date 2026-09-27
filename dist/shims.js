@@ -10,7 +10,7 @@ import {
   shimDirFor,
   shimDirOnPath,
   stripShimDir
-} from "./chunk-5VLKRCFM.js";
+} from "./chunk-7PC6T3GB.js";
 export {
   describeInstall,
   describeRemove,
