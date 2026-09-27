@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describeRemoved, listLines, parseArgs, resolveRef, runHotkeyCommand } from '../src/cli.js';
-import type { StashEntry } from '../src/core/store.js';
+import { describeRemoved, listLines, parseArgs, resolveRef, runHotkeyCommand, runShelfCommand, viewEntries } from '../src/cli.js';
+import { Shelves } from '../src/core/shelves.js';
+import { Store } from '../src/core/store.js';
+import type { Prompt } from '../src/core/store.js';
 
 describe('parseArgs', () => {
   it('parses agent runs and forwards args', () => {
@@ -75,17 +77,6 @@ describe('runHotkeyCommand', () => {
     expect(result.message).toContain('codex');
     await expect(readFile(file, 'utf8')).rejects.toThrow();
   });
-});
-
-describe('runHotkeyCommand for the list hotkey', () => {
-  let dir: string;
-  let file: string;
-  beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'prompt-shelf-cli-'));
-    file = join(dir, 'config.json');
-  });
-  afterEach(() => rm(dir, { recursive: true, force: true }));
-
   it('shows and sets the list hotkey without touching the stash hotkey', async () => {
     expect(await runHotkeyCommand(undefined, file, true)).toEqual({ code: 0, message: 'list hotkey: ctrl+q' });
     expect(await runHotkeyCommand('f3', file, true)).toEqual({ code: 0, message: 'list hotkey set to f3 — takes effect in new sessions' });
@@ -107,7 +98,7 @@ describe('parseArgs shim subcommands', () => {
   });
 });
 
-const entry = (id: string, cwd: string): StashEntry => ({ id, text: `text ${id}`, agent: 'claude', cwd, createdAt: '2026-09-18T10:00:00Z' });
+const entry = (id: string, cwd: string): Prompt => ({ id, text: `text ${id}`, agent: 'claude', cwd, createdAt: '2026-09-18T10:00:00Z' });
 const mixed = [entry('a', '/work/repo'), entry('b', '/other'), entry('c', '/work/repo/'), entry('d', '/other')];
 
 describe('listLines', () => {
@@ -147,5 +138,80 @@ describe('describeRemoved', () => {
     expect(describeRemoved({ ...mixed[0]!, text: 'a\nb' })).toBe('removed: [claude · repo] a ⏎ b');
     const long = describeRemoved({ ...mixed[0]!, text: 'x'.repeat(70) });
     expect(long).toBe('removed: [claude · repo] ' + 'x'.repeat(60) + '…');
+  });
+});
+
+describe('shelf arguments', () => {
+  it('parses shelf options and shelf management commands', () => {
+    expect(parseArgs(['add', '--shelf', 'Git', 'write', 'a', 'commit'])).toEqual({ kind: 'add', text: 'write a commit', shelf: 'Git' });
+    expect(parseArgs(['list', '--shelf', 'Git'])).toEqual({ kind: 'list', all: false, shelf: 'Git' });
+    expect(parseArgs(['shelves'])).toEqual({ kind: 'shelves' });
+    expect(parseArgs(['shelf', 'new', 'Common'])).toEqual({ kind: 'shelf', action: 'new', names: ['Common'], force: false });
+    expect(parseArgs(['shelf', 'star', 'Common'])).toEqual({ kind: 'shelf', action: 'star', names: ['Common'], force: false });
+    expect(parseArgs(['shelf', 'rm', 'Git', '--force'])).toEqual({ kind: 'shelf', action: 'rm', names: ['Git'], force: true });
+    expect(() => parseArgs(['shelf', 'nope'])).toThrow(/usage/);
+    expect(() => parseArgs(['list', '--shelf'])).toThrow(/needs a shelf name/);
+  });
+});
+
+describe('viewEntries', () => {
+  const e = (id: string, extra: Partial<Prompt> = {}): Prompt => ({ id, text: id, agent: 'claude', cwd: '/repo', createdAt: '', ...extra });
+  const entries = [e('draft'), e('git-1', { shelf: 'Git' }), e('git-2', { shelf: 'Git' }), e('common', { shelf: 'Common' })];
+
+  it('keeps shelf prompts out of the stash', () => {
+    expect(viewEntries(entries, { all: true, cwd: '/repo' }).map((x) => x.id)).toEqual(['draft']);
+  });
+
+  it('shows one shelf, matched case-insensitively, from any folder', () => {
+    expect(viewEntries(entries, { all: false, shelf: 'git', cwd: '/elsewhere' }).map((x) => x.id)).toEqual(['git-1', 'git-2']);
+  });
+});
+
+describe('flags belong to their command', () => {
+  it('rejects flags a command does not take instead of acting on something else', () => {
+    expect(() => parseArgs(['pop', '--shelf', 'Git'])).toThrow(/pop doesn't take --shelf/);
+    expect(() => parseArgs(['add', '--all', 'text'])).toThrow(/add doesn't take --all/);
+    expect(() => parseArgs(['list', '--nope'])).toThrow(/doesn't take --nope/);
+  });
+
+  it('passes everything after the agent name to the agent untouched', () => {
+    expect(parseArgs(['claude', '--resume', '--shelf'])).toEqual({ kind: 'run', agent: 'claude', args: ['--resume', '--shelf'], record: false });
+  });
+});
+
+describe('runShelfCommand', () => {
+  let dir: string;
+  let shelves: Shelves;
+  let store: Store;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'prompt-shelf-shelf-cmd-'));
+    shelves = new Shelves(join(dir, 'shelves.json'));
+    store = new Store(join(dir, 'stash.jsonl'));
+  });
+  afterEach(() => rm(dir, { recursive: true, force: true }));
+  const cmd = (action: 'new' | 'rename' | 'rm' | 'star', names: string[], force = false) => runShelfCommand({ action, names, force }, shelves, store);
+
+  it('only deletes a shelf with prompts when told to, and then deletes its prompts too', async () => {
+    await store.add({ text: 'keep me', agent: 'cli', cwd: '/', shelf: 'Common' });
+    await store.add({ text: 'draft', agent: 'cli', cwd: '/' });
+    await expect(cmd('rm', ['common'])).rejects.toThrow(/--force/);
+    expect(await shelves.list()).toContain('Common');
+    await cmd('rm', ['Common'], true);
+    expect(await shelves.list()).not.toContain('Common');
+    expect((await store.list()).map((e) => e.text)).toEqual(['draft']);
+  });
+
+  it('renames a shelf and moves its prompts along', async () => {
+    await store.add({ text: 'review', agent: 'cli', cwd: '/', shelf: 'Common' });
+    await cmd('rename', ['Common', 'Everyday']);
+    expect(await shelves.list()).toContain('Everyday');
+    expect((await store.list())[0]!.shelf).toBe('Everyday');
+  });
+
+  it('can still star and list a shelf that only prompts point at', async () => {
+    await store.add({ text: 'lost', agent: 'cli', cwd: '/', shelf: 'Lost' });
+    await cmd('star', ['lost']);
+    expect(await shelves.starred()).toEqual(['Lost']);
+    expect(listLines(await store.list(), { all: false, shelf: 'Lost', cwd: '/' })[0]).toContain('lost');
   });
 });

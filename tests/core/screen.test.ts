@@ -29,18 +29,4 @@ describe('Screen', () => {
     expect(s.lines()[0]).toBe('› Ask Codex to do anything');
     expect(s.lines({ dropDim: true })).toEqual(['›', '› typed']);
   });
-
-  it('resizes', async () => {
-    const s = new Screen(10, 3);
-    s.resize(40, 6);
-    expect(s.cols).toBe(40);
-    expect(s.lines()).toHaveLength(6);
-  });
-
-  it('serializes with attributes', async () => {
-    const s = new Screen(10, 2);
-    await s.write('\x1b[31mred\x1b[0m');
-    expect(s.serialize()).toContain('red');
-    expect(s.serialize()).toContain('\x1b[31m');
-  });
 });

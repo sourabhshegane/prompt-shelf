@@ -1,22 +1,24 @@
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { readTextIfExists, withFileLock, writeFileAtomic } from './core/files.js';
 
-export const stashDir = join(homedir(), '.prompt-shelf');
+// PROMPT_SHELF_DIR keeps the stash, shelves and settings somewhere else, e.g. for testing.
+export const stashDir = process.env.PROMPT_SHELF_DIR || join(homedir(), '.prompt-shelf');
 export const stashFile = join(stashDir, 'stash.jsonl');
 export const configFile = join(stashDir, 'config.json');
+export const shelvesFile = join(stashDir, 'shelves.json');
 
 export interface Config {
-  /** Stashes the box, or opens the list when the box is empty. */
+  /** Asks where to save what is in the box (the stash, or a shelf). */
   hotkey: string;
-  /** Always opens the list and never stashes; a picked entry is appended to what is in the box. */
+  /** Opens the list; a picked prompt is added after what is in the box. */
   listHotkey: string;
 }
 
 const defaults: Config = { hotkey: 'ctrl+f', listHotkey: 'ctrl+q' };
 
 async function readRaw(filePath: string): Promise<Record<string, unknown>> {
-  const raw = await readFile(filePath, 'utf8').catch(() => '');
+  const raw = await readTextIfExists(filePath);
   if (!raw) return {};
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -32,9 +34,8 @@ export async function loadConfig(filePath = configFile): Promise<Config> {
 }
 
 export async function saveConfig(partial: Partial<Config>, filePath = configFile): Promise<void> {
-  const merged = { ...(await readRaw(filePath)), ...partial };
-  await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(merged, null, 2) + '\n');
-  await rename(tmp, filePath);
+  await withFileLock(filePath, async () => {
+    const merged = { ...(await readRaw(filePath)), ...partial };
+    await writeFileAtomic(filePath, JSON.stringify(merged, null, 2) + '\n');
+  });
 }

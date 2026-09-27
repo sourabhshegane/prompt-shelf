@@ -33,13 +33,6 @@ describe('codexAdapter.unsafeDraft', () => {
   });
 });
 
-describe('codexAdapter.clearDraft', () => {
-  it('moves to end then backspaces once per character including newlines', () => {
-    const seq = codexAdapter.clearDraft({ text: 'ab\ncd' });
-    expect(seq).toBe('\x1b[F' + '\x7f'.repeat(5));
-  });
-});
-
 describe('codexAdapter.inputTop', () => {
   it('returns the marker row for one-line and multi-line prompts', () => {
     for (const name of ['codex-oneline.txt', 'codex-multiline.txt']) {

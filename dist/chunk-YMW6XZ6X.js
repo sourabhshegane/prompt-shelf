@@ -1,8 +1,8 @@
 // src/shims.ts
-import { accessSync, constants, statSync } from "fs";
+import { accessSync, constants, statSync as statSync2 } from "fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "fs/promises";
-import { homedir } from "os";
-import { basename, delimiter, dirname, join, resolve } from "path";
+import { homedir as homedir2 } from "os";
+import { basename, delimiter, dirname as dirname2, join as join3, resolve as resolve2 } from "path";
 
 // src/adapters/types.ts
 var END_KEY = "\x1B[F";
@@ -37,6 +37,143 @@ function readMarkedDraft(lines, cursor, spec3, cols) {
   return text ? { text } : null;
 }
 
+// src/core/skills.ts
+import { readFileSync, readdirSync, statSync } from "fs";
+import { homedir } from "os";
+import { join as join2 } from "path";
+
+// src/core/scope.ts
+import { existsSync } from "fs";
+import { dirname, join, resolve } from "path";
+function repoDirs(dir) {
+  const dirs = [];
+  for (let d = resolve(dir); ; d = dirname(d)) {
+    dirs.push(d);
+    if (existsSync(join(d, ".git")) || dirname(d) === d) return dirs;
+  }
+}
+var roots = /* @__PURE__ */ new Map();
+function repoRoot(dir) {
+  const start = resolve(dir);
+  let root = roots.get(start);
+  if (root === void 0) {
+    const dirs = repoDirs(start);
+    const top = dirs[dirs.length - 1];
+    root = existsSync(join(top, ".git")) ? top : start;
+    roots.set(start, root);
+  }
+  return root;
+}
+var inRepo = (entry, cwd) => repoRoot(entry.cwd) === repoRoot(cwd);
+function scoped(entries, scope, cwd) {
+  return scope === "all" || cwd === void 0 ? entries : entries.filter((e) => inRepo(e, cwd));
+}
+
+// src/core/skills.ts
+var defaultSkillRoots = () => ({
+  home: homedir(),
+  codexHome: process.env.CODEX_HOME || join2(homedir(), ".codex"),
+  systemCodexSkills: "/etc/codex/skills"
+});
+function parseSkillFile(text) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  if (!match) return {};
+  const lines = match[1].split(/\r?\n/);
+  const out = {};
+  for (let i = 0; i < lines.length; i++) {
+    const field = /^(name|description|user-invocable):\s*(.*)$/.exec(lines[i]);
+    if (!field) continue;
+    const parts = [field[2].trim()];
+    const block = /^[|>]-?$/.test(parts[0]);
+    if (block) parts.pop();
+    while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) parts.push(lines[++i].trim());
+    out[field[1]] = parts.join(" ").trim().replace(/^(["'])(.*)\1$/, "$2");
+  }
+  return out;
+}
+function subfolders(dir) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return names.filter((name) => {
+    try {
+      return statSync(join2(dir, name)).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+function skillsIn(dir, source, prefix = "", off = /* @__PURE__ */ new Set()) {
+  const found = [];
+  for (const folder of subfolders(dir)) {
+    let text;
+    try {
+      text = readFileSync(join2(dir, folder, "SKILL.md"), "utf8");
+    } catch {
+      continue;
+    }
+    const meta = parseSkillFile(text);
+    const name = prefix + (meta.name || folder);
+    if (meta["user-invocable"] === "false" || off.has(name)) continue;
+    const heading = /^#\s+(.+)$/m.exec(text)?.[1]?.trim() ?? "";
+    found.push({ name, description: meta.description || heading, source });
+  }
+  return found;
+}
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+var claudeSettingsFiles = (home, cwd) => [
+  join2(home, ".claude", "settings.json"),
+  ...repoDirs(cwd).flatMap((d) => [join2(d, ".claude", "settings.json"), join2(d, ".claude", "settings.local.json")])
+];
+function switchedOff(home, cwd) {
+  const off = /* @__PURE__ */ new Set();
+  for (const file of claudeSettingsFiles(home, cwd)) {
+    const overrides = readJson(file)?.skillOverrides ?? {};
+    for (const [name, value] of Object.entries(overrides)) if (value === "off") off.add(name);
+  }
+  return off;
+}
+function pluginSkills(home, off) {
+  const settings = readJson(join2(home, ".claude", "settings.json"));
+  const installed = readJson(join2(home, ".claude", "plugins", "installed_plugins.json"));
+  return Object.entries(settings?.enabledPlugins ?? {}).filter(([, on]) => on).flatMap(([id]) => {
+    const path = installed?.plugins?.[id]?.[0]?.installPath;
+    return path ? skillsIn(join2(path, "skills"), "plugin", `${id.split("@")[0]}:`, off) : [];
+  });
+}
+var firstByName = (skills) => {
+  const seen = /* @__PURE__ */ new Set();
+  return skills.filter((s) => !seen.has(s.name) && seen.add(s.name));
+};
+function claudeSkills(cwd, roots2 = defaultSkillRoots()) {
+  const off = switchedOff(roots2.home, cwd);
+  const synced = join2(roots2.home, ".claude", "skills", "synced");
+  return firstByName([
+    ...repoDirs(cwd).flatMap((d) => skillsIn(join2(d, ".claude", "skills"), "project", "", off)),
+    ...skillsIn(join2(roots2.home, ".claude", "skills"), "personal", "", off),
+    ...subfolders(synced).flatMap((d) => skillsIn(join2(synced, d), "personal", "", off)),
+    ...pluginSkills(roots2.home, off)
+  ]);
+}
+function codexSkills(cwd, roots2 = defaultSkillRoots()) {
+  return firstByName([
+    ...repoDirs(cwd).flatMap((d) => skillsIn(join2(d, ".agents", "skills"), "project")),
+    ...skillsIn(join2(roots2.home, ".agents", "skills"), "personal"),
+    ...skillsIn(join2(roots2.codexHome, "skills"), "personal"),
+    ...skillsIn(roots2.systemCodexSkills, "personal"),
+    ...skillsIn(join2(roots2.codexHome, "skills", ".system"), "built-in")
+  ]);
+}
+
 // src/adapters/claude.ts
 var spec = {
   marker: /^\s*[>❯]\s?(.*)$/,
@@ -45,11 +182,16 @@ var spec = {
 };
 var claudeAdapter = {
   name: "claude",
+  displayName: "Claude Code",
   command: "claude",
+  skills: (cwd) => claudeSkills(cwd),
+  // `/name` runs a skill, but only at the start of a prompt; after typed text it is named in words.
+  skillPrompt: (name, afterText) => afterText ? `use the /${name} skill ` : `/${name} `,
   reservedKeys: ["ctrl+s", "ctrl+g", "ctrl+t", "ctrl+o", "ctrl+r", "ctrl+l", "ctrl+j", "ctrl+v", "ctrl+x", "ctrl+b", "ctrl+e", "ctrl+c", "ctrl+d"],
   readDraft: (lines, cursor, cols) => readMarkedDraft(lines, cursor, spec, cols),
+  dimPlaceholder: true,
   unsafeDraft: /\[Pasted text #\d+/,
-  pasteLabel: { pattern: /\[Pasted text #(\d+)(?: \+\d+ lines?)?\]/g, key: "number" },
+  pasteLabel: { pattern: /\[Pasted text #(\d+)(?: \+(\d+) lines?)?\]/g, key: "number" },
   clearDraft: backspaceClear,
   inputTop: (lines) => findInputStart(lines, spec),
   isBorder: (line) => spec.terminator.test(line)
@@ -63,7 +205,11 @@ var spec2 = {
 };
 var codexAdapter = {
   name: "codex",
+  displayName: "Codex",
   command: "codex",
+  skills: (cwd) => codexSkills(cwd),
+  // `$name` mentions a skill anywhere in a prompt.
+  skillPrompt: (name) => `$${name} `,
   reservedKeys: ["ctrl+t", "ctrl+c", "ctrl+d", "ctrl+j", "ctrl+r", "ctrl+g"],
   readDraft: (lines, cursor, cols) => readMarkedDraft(lines, cursor, spec2, cols),
   dimPlaceholder: true,
@@ -86,17 +232,17 @@ var reservedBy = (hotkey) => [...registry.values()].filter((a) => a.reservedKeys
 // src/shims.ts
 var MARKER = "# prompt-shelf";
 var win32 = process.platform === "win32";
-var homeFor = (env) => env.HOME ?? env.USERPROFILE ?? homedir();
-var shimDirFor = (env) => join(homeFor(env), ".prompt-shelf", "bin");
+var homeFor = (env) => env.HOME ?? env.USERPROFILE ?? homedir2();
+var shimDirFor = (env) => join3(homeFor(env), ".prompt-shelf", "bin");
 var shimDir = shimDirFor(process.env);
-var isShimDir = (entry, env) => resolve(entry) === resolve(shimDirFor(env));
+var isShimDir = (entry, env) => resolve2(entry) === resolve2(shimDirFor(env));
 var shimDirOnPath = (env = process.env) => (env.PATH ?? "").split(delimiter).some((entry) => entry && isShimDir(entry, env));
 function stripShimDir(path, env = process.env) {
   return (path ?? "").split(delimiter).filter((entry) => !entry || !isShimDir(entry, env)).join(delimiter);
 }
 var isExecutableFile = (file) => {
   try {
-    if (!statSync(file).isFile()) return false;
+    if (!statSync2(file).isFile()) return false;
     if (!win32) accessSync(file, constants.X_OK);
     return true;
   } catch {
@@ -107,7 +253,7 @@ function findRealBinary(name, env = process.env) {
   const exts = win32 ? [...(env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";"), ""] : [""];
   for (const entry of stripShimDir(env.PATH, env).split(delimiter)) {
     for (const ext of exts) {
-      const candidate = join(entry, name + ext);
+      const candidate = join3(entry, name + ext);
       if (isExecutableFile(candidate)) return candidate;
     }
   }
@@ -129,11 +275,11 @@ function rcFilesFor(env) {
   if (win32) return null;
   const home = homeFor(env);
   const shell = basename(env.SHELL ?? "");
-  if (shell === "zsh") return { shell, files: [join(home, ".zshrc")] };
-  if (shell === "fish") return { shell, files: [join(home, ".config", "fish", "config.fish")] };
+  if (shell === "zsh") return { shell, files: [join3(home, ".zshrc")] };
+  if (shell === "fish") return { shell, files: [join3(home, ".config", "fish", "config.fish")] };
   if (shell === "bash") {
-    const files = [join(home, ".bashrc")];
-    const profile = join(home, ".bash_profile");
+    const files = [join3(home, ".bashrc")];
+    const profile = join3(home, ".bash_profile");
     if (process.platform === "darwin" && isReadable(profile)) files.push(profile);
     return { shell, files };
   }
@@ -150,7 +296,7 @@ var isReadable = (file) => {
 async function appendRcLine(file, line) {
   const current = await readFile(file, "utf8").catch(() => "");
   if (current.includes(MARKER)) return false;
-  await mkdir(dirname(file), { recursive: true });
+  await mkdir(dirname2(file), { recursive: true });
   const prefix = current && !current.endsWith("\n") ? "\n" : "";
   await writeFile(file, current + prefix + line + "\n");
   return true;
@@ -171,7 +317,7 @@ async function installShims(env = process.env) {
   const shims = [];
   for (const name of adapterNames) {
     if (!findRealBinary(name, env)) continue;
-    const file = join(dir, shimFileName(name));
+    const file = join3(dir, shimFileName(name));
     await writeFile(file, shimContent(name));
     if (!win32) await chmod(file, 493);
     shims.push(file);
@@ -186,7 +332,7 @@ async function removeShims(env = process.env) {
   const dir = shimDirFor(env);
   const removed = [];
   for (const name of adapterNames) {
-    const file = join(dir, shimFileName(name));
+    const file = join3(dir, shimFileName(name));
     if (!isReadable(file)) continue;
     await rm(file, { force: true });
     removed.push(file);
@@ -214,6 +360,7 @@ function describeRemove(result) {
 }
 
 export {
+  scoped,
   adapterNames,
   getAdapter,
   reservedBy,
@@ -229,4 +376,4 @@ export {
   describeInstall,
   describeRemove
 };
-//# sourceMappingURL=chunk-5VLKRCFM.js.map
+//# sourceMappingURL=chunk-YMW6XZ6X.js.map

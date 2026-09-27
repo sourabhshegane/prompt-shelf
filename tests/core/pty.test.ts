@@ -10,8 +10,7 @@ describe.skipIf(!unix)('spawnAgent', () => {
     pty.onData((d) => (out += d));
     const exit = new Promise<number>((r) => pty.onExit(r));
     pty.write('ping\r');
-    await new Promise((r) => setTimeout(r, 200));
-    expect(out).toContain('ping');
+    await expect.poll(() => out).toContain('ping');
     pty.write('\x04');
     expect(await exit).toBe(0);
   });

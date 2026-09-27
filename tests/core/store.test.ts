@@ -46,10 +46,33 @@ describe('Store', () => {
     expect((await stat(dirname(nested))).mode & 0o777).toBe(0o700);
   });
 
-  it('skips corrupt lines instead of throwing', async () => {
-    await writeFile(file, '{"id":"1","text":"ok","agent":"claude","cwd":"/","createdAt":"2026-01-01T00:00:00Z"}\nnot json\n');
-    const list = await new Store(file).list();
-    expect(list).toHaveLength(1);
-    expect(list[0]!.text).toBe('ok');
+  it('skips unreadable lines when listing, and keeps them when rewriting', async () => {
+    const ok = '{"id":"1","text":"ok","agent":"claude","cwd":"/","createdAt":"2026-01-01T00:00:00Z"}';
+    await writeFile(file, `${ok}\nnot json\nnull\n{"id":2}\n`);
+    const store = new Store(file);
+    expect((await store.list()).map((e) => e.text)).toEqual(['ok']);
+    await store.remove('1');
+    expect(await readFile(file, 'utf8')).toBe('not json\nnull\n{"id":2}\n');
+  });
+});
+
+describe('Store with several sessions', () => {
+  it('never loses a prompt added by one session while another rewrites the file', async () => {
+    const a = new Store(file);
+    const b = new Store(file);
+    const seed = await Promise.all(Array.from({ length: 10 }, (_, i) => a.add({ text: `seed ${i}`, agent: 'claude', cwd: '/' })));
+    await Promise.all([
+      ...seed.map((e) => a.remove(e.id)),
+      ...Array.from({ length: 10 }, (_, i) => b.add({ text: `new ${i}`, agent: 'codex', cwd: '/' })),
+    ]);
+    const texts = (await a.list()).map((e) => e.text).sort();
+    expect(texts).toEqual(Array.from({ length: 10 }, (_, i) => `new ${i}`).sort());
+  });
+
+  it('counts every use when uses happen at the same moment', async () => {
+    const store = new Store(file);
+    const saved = await store.add({ text: 'review', agent: 'claude', cwd: '/', shelf: 'Common' });
+    await Promise.all(Array.from({ length: 5 }, () => store.markUsed(saved.id)));
+    expect((await store.list())[0]!.usedCount).toBe(5);
   });
 });

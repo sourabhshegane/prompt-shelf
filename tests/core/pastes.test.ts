@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PasteLabels, PasteRecorder } from '../../src/core/pastes.js';
+import { PasteLabels, PasteRecorder, PasteTracker } from '../../src/core/pastes.js';
 import { claudeAdapter } from '../../src/adapters/claude.js';
 import { codexAdapter } from '../../src/adapters/codex.js';
 
@@ -19,6 +19,8 @@ describe('PasteRecorder', () => {
 
 describe('PasteLabels with the Claude placeholder', () => {
   const labels = () => new PasteLabels(claudeAdapter.pasteLabel!);
+  // A paste of n+1 lines, which Claude shows as "+n lines".
+  const lines = (tag: string, extra: number) => Array.from({ length: extra + 1 }, (_, i) => `${tag}${i}`).join('\n');
 
   it('expands a placeholder that appeared after a paste', () => {
     const l = labels();
@@ -26,31 +28,36 @@ describe('PasteLabels with the Claude placeholder', () => {
     expect(l.expand('fix this[Pasted text #1 +3 lines] please')).toBe('fix thisa\nb\nc\nd please');
   });
 
-  it('maps a single-line placeholder and keeps older numbers', () => {
+  it('maps a long single-line paste and keeps older numbers', () => {
     const l = labels();
-    l.learn('❯ [Pasted text #1 +3 lines]', ['first']);
-    l.learn('❯ [Pasted text #1 +3 lines][Pasted text #2]', ['second']);
-    expect(l.expand('[Pasted text #1 +3 lines] and [Pasted text #2]')).toBe('first and second');
-  });
-
-  it('waits until the placeholder shows up, however long the agent takes', () => {
-    const l = labels();
-    expect(l.learn('❯ still drawing', ['slow paste'])).toBe(false);
-    expect(l.learn('❯ [Pasted text #1 +9 lines]', ['slow paste'])).toBe(true);
-    expect(l.expand('[Pasted text #1 +9 lines]')).toBe('slow paste');
+    l.learn('❯ [Pasted text #1 +3 lines]', [lines('a', 3)]);
+    l.learn('❯ [Pasted text #1 +3 lines][Pasted text #2]', ['x'.repeat(900)]);
+    expect(l.expand('[Pasted text #1 +3 lines] and [Pasted text #2]')).toBe(`${lines('a', 3)} and ${'x'.repeat(900)}`);
   });
 
   it('gives new numbers to the latest pastes, skipping short ones that got no placeholder', () => {
     const l = labels();
-    l.learn('❯ [Pasted text #1 +4 lines][Pasted text #2 +5 lines]', ['short', 'long one', 'long two']);
-    expect(l.expand('[Pasted text #1 +4 lines] [Pasted text #2 +5 lines]')).toBe('long one long two');
+    l.learn('❯ [Pasted text #1 +4 lines][Pasted text #2 +5 lines]', ['short', lines('a', 4), lines('b', 5)]);
+    expect(l.expand('[Pasted text #1 +4 lines] [Pasted text #2 +5 lines]')).toBe(`${lines('a', 4)} ${lines('b', 5)}`);
   });
 
-  it('ignores numbers it has already mapped', () => {
+  it('keeps a number it already mapped when the paste still fits it', () => {
     const l = labels();
-    l.learn('❯ [Pasted text #1 +4 lines]', ['first']);
+    l.learn('❯ [Pasted text #1 +4 lines]', [lines('a', 4)]);
     expect(l.learn('❯ [Pasted text #1 +4 lines]', ['unrelated'])).toBe(false);
-    expect(l.expand('[Pasted text #1 +4 lines]')).toBe('first');
+    expect(l.expand('[Pasted text #1 +4 lines]')).toBe(lines('a', 4));
+  });
+
+  it('follows the agent when it starts numbering again, and never returns the old paste', () => {
+    const l = labels();
+    l.learn('❯ [Pasted text #1 +4 lines]', [lines('old', 4)]);
+    // A new session: #1 again, for a different paste.
+    expect(l.learn('❯ [Pasted text #1 +2 lines]', [lines('new', 2)])).toBe(true);
+    expect(l.expand('[Pasted text #1 +2 lines]')).toBe(lines('new', 2));
+    // If the new paste was never seen, refuse instead of guessing.
+    const fresh = labels();
+    fresh.learn('❯ [Pasted text #1 +4 lines]', [lines('old', 4)]);
+    expect(fresh.expand('[Pasted text #1 +2 lines]')).toBeNull();
   });
 
   it('returns null when a placeholder was never seen being pasted', () => {
@@ -59,6 +66,43 @@ describe('PasteLabels with the Claude placeholder', () => {
 
   it('leaves text without placeholders alone', () => {
     expect(labels().expand('plain draft')).toBe('plain draft');
+  });
+});
+
+describe('PasteTracker', () => {
+  const setup = () => {
+    let screen = '❯ still drawing';
+    let now = 0;
+    const tracker = new PasteTracker(new PasteLabels(claudeAdapter.pasteLabel!), () => screen, () => now);
+    return { tracker, show: (s: string) => (screen = s), wait: (ms: number) => (now += ms) };
+  };
+
+  it('matches the placeholder whenever it shows up, even after the agent took a while', () => {
+    const { tracker, show, wait } = setup();
+    tracker.pasted('a\nb\nc');
+    tracker.check();
+    expect(tracker.waiting).toBe(true);
+    wait(3000);
+    show('❯ [Pasted text #1 +2 lines]');
+    tracker.check();
+    expect(tracker.waiting).toBe(false);
+    expect(tracker.expand('[Pasted text #1 +2 lines]')).toBe('a\nb\nc');
+  });
+
+  it('on the stash key, still matches a paste that has been waiting longer than usual', () => {
+    const { tracker, show, wait } = setup();
+    tracker.pasted('a\nb');
+    wait(60_000);
+    show('❯ [Pasted text #1 +1 lines]');
+    expect(tracker.expand('[Pasted text #1 +1 lines]')).toBe('a\nb');
+  });
+
+  it('stops waiting for pastes that never got a placeholder', () => {
+    const { tracker, wait } = setup();
+    tracker.pasted('short');
+    wait(6000);
+    tracker.check();
+    expect(tracker.waiting).toBe(false);
   });
 });
 

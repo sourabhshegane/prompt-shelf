@@ -111,3 +111,37 @@ export class KeyInterceptor {
     return null;
   }
 }
+
+const CSI_U = /^\x1b\[(\d+)(?:;(\d+))?u$/;
+
+/** Kitty-protocol (CSI u) encodings of plain keys, turned back into the bytes they stand for. */
+export function normalizeKey(key: string): string {
+  const m = CSI_U.exec(key);
+  if (!m) return key;
+  const code = Number(m[1]);
+  const mods = Number(m[2] ?? '1');
+  if (mods !== 1) return key;
+  if (code === 27) return '\x1b';
+  if (code === 13) return '\r';
+  if (code === 127) return '\x7f';
+  return String.fromCodePoint(code);
+}
+
+// One escape sequence: CSI (ESC [ … final byte) or SS3 (ESC O x).
+const ESCAPE_SEQUENCE = /^\x1b(?:\[[0-9;?]*[@-~]|O.)/;
+
+/**
+ * Splits a chunk of terminal input into single keys: escape sequences such as arrows stay whole,
+ * everything else is one character each. A burst of arrow presses or fast typing arrives as one
+ * chunk, and each key in it must count.
+ */
+export function splitKeys(chunk: string): string[] {
+  const keys: string[] = [];
+  for (let i = 0; i < chunk.length; ) {
+    const seq = chunk[i] === '\x1b' ? ESCAPE_SEQUENCE.exec(chunk.slice(i)) : null;
+    const key = seq ? seq[0] : String.fromCodePoint(chunk.codePointAt(i)!);
+    keys.push(normalizeKey(key));
+    i += key.length;
+  }
+  return keys;
+}

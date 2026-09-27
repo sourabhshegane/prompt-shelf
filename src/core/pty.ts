@@ -29,7 +29,6 @@ export interface AgentPty {
   resize(cols: number, rows: number): void;
   onData(cb: (data: string) => void): void;
   onExit(cb: (code: number) => void): void;
-  kill(): void;
 }
 
 export function spawnAgent(opts: {
@@ -53,6 +52,5 @@ export function spawnAgent(opts: {
     resize: (cols, rows) => child.resize(cols, rows),
     onData: (cb) => void child.onData(cb),
     onExit: (cb) => void child.onExit(({ exitCode, signal }) => cb(signal ? 128 + signal : exitCode)),
-    kill: () => child.kill(),
   };
 }

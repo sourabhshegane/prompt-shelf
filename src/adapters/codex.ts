@@ -1,5 +1,6 @@
 import type { AgentAdapter, MarkerSpec } from './types.js';
 import { backspaceClear, findInputStart, readMarkedDraft } from './types.js';
+import { codexSkills } from '../core/skills.js';
 
 const spec: MarkerSpec = {
   marker: /^\s*›\s?(.*)$/,
@@ -9,7 +10,11 @@ const spec: MarkerSpec = {
 
 export const codexAdapter: AgentAdapter = {
   name: 'codex',
+  displayName: 'Codex',
   command: 'codex',
+  skills: (cwd) => codexSkills(cwd),
+  // `$name` mentions a skill anywhere in a prompt.
+  skillPrompt: (name) => `$${name} `,
   reservedKeys: ['ctrl+t', 'ctrl+c', 'ctrl+d', 'ctrl+j', 'ctrl+r', 'ctrl+g'],
   readDraft: (lines, cursor, cols) => readMarkedDraft(lines, cursor, spec, cols),
   dimPlaceholder: true,

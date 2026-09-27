@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { claudeAdapter } from '../../src/adapters/claude.js';
+import { backspaceClear } from '../../src/adapters/types.js';
 
 const fixture = (name: string) => readFileSync(join(import.meta.dirname, 'fixtures', name), 'utf8').split('\n');
 const cursorOnLine = (lines: string[], needle: string) => ({ y: lines.findIndex((l) => l.includes(needle)), x: 0 });
@@ -63,9 +64,9 @@ describe('claudeAdapter.unsafeDraft', () => {
   });
 });
 
-describe('claudeAdapter.clearDraft', () => {
+describe('backspaceClear (both adapters clear this way)', () => {
   it('moves to end then backspaces once per character including newlines', () => {
-    const seq = claudeAdapter.clearDraft({ text: 'ab\ncd' });
+    const seq = backspaceClear({ text: 'ab\ncd' });
     expect(seq).toBe('\x1b[F' + '\x7f'.repeat(5));
   });
 });

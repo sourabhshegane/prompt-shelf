@@ -1,4 +1,5 @@
 import type { PasteLabel } from '../core/pastes.js';
+import type { Skill } from '../core/skills.js';
 import type { Cursor } from '../core/screen.js';
 
 export interface Draft {
@@ -7,9 +8,15 @@ export interface Draft {
 
 export interface AgentAdapter {
   name: string;
+  /** How the agent is named in the UI. */
+  displayName: string;
   command: string;
+  /** Skills the agent can use in `cwd`, for the Skills tab. */
+  skills(cwd: string): Skill[];
+  /** What picking a skill puts in the box, in the agent's own syntax; `afterText` when the box already has text. */
+  skillPrompt(name: string, afterText: boolean): string;
   readDraft(lines: string[], cursor: Cursor, cols?: number): Draft | null;
-  /** The empty input box shows a faint placeholder that must not be read as a draft. */
+  /** The empty input box shows a faint placeholder (e.g. `Try "refactor <filepath>"`) that must not be read as a draft. */
   dimPlaceholder?: boolean;
   unsafeDraft: RegExp;
   /** Placeholder the agent shows for a collapsed paste; lets a stash keep the real text. */
