@@ -1,6 +1,6 @@
 import type { AgentAdapter, MarkerSpec } from './types.js';
 import { backspaceClear, findInputStart, readMarkedDraft } from './types.js';
-import { codexSkills } from '../core/skills.js';
+import { codexSkills } from './skill-files.js';
 
 const spec: MarkerSpec = {
   marker: /^\s*›\s?(.*)$/,

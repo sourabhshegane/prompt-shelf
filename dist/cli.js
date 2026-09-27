@@ -12,16 +12,86 @@ import {
   shimDir,
   shimDirOnPath,
   stripShimDir
-} from "./chunk-YMW6XZ6X.js";
+} from "./chunk-IHS52UKW.js";
 
-// src/cli.ts
-import { createRequire as createRequire2 } from "module";
+// package.json
+var package_default = {
+  name: "prompt-shelf",
+  version: "0.1.3",
+  description: "Stash multiple prompts for later in Claude Code and Codex CLI: Ctrl+F to park a draft, Ctrl+Q to bring it back. Persistent, per repo.",
+  type: "module",
+  license: "MIT",
+  author: "Sourabh Shegane (https://github.com/sourabhshegane)",
+  homepage: "https://github.com/sourabhshegane/prompt-shelf#readme",
+  repository: {
+    type: "git",
+    url: "git+https://github.com/sourabhshegane/prompt-shelf.git"
+  },
+  bugs: {
+    url: "https://github.com/sourabhshegane/prompt-shelf/issues"
+  },
+  bin: {
+    stash: "bin/stash.js"
+  },
+  keywords: [
+    "prompt-library",
+    "prompt-shelf",
+    "claude-code",
+    "claude",
+    "anthropic",
+    "codex",
+    "openai-codex",
+    "coding-agent",
+    "ai-agent",
+    "ai-coding",
+    "prompt",
+    "prompt-stash",
+    "prompt-queue",
+    "stash",
+    "clipboard",
+    "terminal",
+    "tui",
+    "cli",
+    "pty",
+    "developer-tools",
+    "productivity"
+  ],
+  files: [
+    "bin",
+    "dist",
+    "scripts",
+    "README.md",
+    "docs/install"
+  ],
+  engines: {
+    node: ">=20"
+  },
+  scripts: {
+    build: "tsup",
+    dev: "tsup --watch",
+    test: "vitest run",
+    typecheck: "tsc --noEmit",
+    postinstall: "node scripts/postinstall.js",
+    prepublishOnly: "npm run typecheck && npm test && npm run build"
+  },
+  dependencies: {
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
+    "node-pty": "^1.1.0"
+  },
+  devDependencies: {
+    "@types/node": "^24.0.0",
+    tsup: "^8.5.1",
+    typescript: "^5.6.0",
+    vitest: "^5.0.1"
+  }
+};
 
-// src/config.ts
+// src/storage/config.ts
 import { homedir } from "os";
 import { join } from "path";
 
-// src/core/files.ts
+// src/storage/files.ts
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
 import { randomUUID } from "crypto";
 import { dirname } from "path";
@@ -66,7 +136,7 @@ async function readTextIfExists(file) {
   }
 }
 
-// src/config.ts
+// src/storage/config.ts
 var stashDir = process.env.PROMPT_SHELF_DIR || join(homedir(), ".prompt-shelf");
 var stashFile = join(stashDir, "stash.jsonl");
 var configFile = join(stashDir, "config.json");
@@ -93,7 +163,7 @@ async function saveConfig(partial, filePath = configFile) {
   });
 }
 
-// src/core/keys.ts
+// src/terminal/keys.ts
 var PASTE_START = Buffer.from("\x1B[200~");
 var PASTE_END = Buffer.from("\x1B[201~");
 var FUNCTION_KEYS = {
@@ -217,7 +287,7 @@ function splitKeys(chunk) {
   return keys;
 }
 
-// src/core/store.ts
+// src/storage/prompt-store.ts
 import { appendFile } from "fs/promises";
 import { randomUUID as randomUUID2 } from "crypto";
 var isStashDraft = (e) => e.shelf === void 0;
@@ -310,7 +380,7 @@ var Store = class {
   }
 };
 
-// src/core/shelves.ts
+// src/storage/shelf-store.ts
 var RESERVED = ["stash", "skills"];
 var MAX_NAME = 30;
 var DEFAULT_SHELVES = ["Ideas", "To explore", "Common"];
@@ -428,7 +498,7 @@ function validName(name) {
   return clean;
 }
 
-// src/core/time.ts
+// src/domain/time.ts
 function ago(iso, now = /* @__PURE__ */ new Date()) {
   if (!iso) return "";
   const then = new Date(iso);
@@ -446,13 +516,13 @@ function localTime(iso) {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(void 0, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-// src/app.ts
+// src/session/run.ts
 import { spawn as spawn2 } from "child_process";
 import { writeFile as writeFile2 } from "fs/promises";
 import { constants as osConstants } from "os";
 import { join as join3 } from "path";
 
-// src/actions.ts
+// src/session/actions.ts
 async function panelData(ctx) {
   const prompts = await ctx.store.list();
   return { prompts, shelves: withOrphans(await ctx.shelves.list(), prompts), starred: await ctx.shelves.starred() };
@@ -509,7 +579,7 @@ async function pickerEffect(ctx, action, text) {
   return { close: true, clearDraft: true, status: { text: shelf ? `saved to ${shelf}` : `stashed (${await draftsLeft(ctx)})` } };
 }
 
-// src/core/screen.ts
+// src/terminal/screen.ts
 import xterm from "@xterm/headless";
 import serialize from "@xterm/addon-serialize";
 var { Terminal } = xterm;
@@ -564,7 +634,7 @@ var Screen = class {
   }
 };
 
-// src/core/pty.ts
+// src/terminal/pty.ts
 import { accessSync, chmodSync, constants, existsSync, readdirSync } from "fs";
 import { createRequire } from "module";
 import { dirname as dirname2, join as join2 } from "path";
@@ -605,7 +675,7 @@ function spawnAgent(opts) {
   };
 }
 
-// src/core/stdin.ts
+// src/terminal/stdin.ts
 import { StringDecoder } from "string_decoder";
 var StdinPipeline = class {
   constructor(interceptor) {
@@ -628,10 +698,10 @@ var StdinPipeline = class {
   }
 };
 
-// src/core/overlay.ts
+// src/ui/list-panel.ts
 import { basename } from "path";
 
-// src/core/terminal.ts
+// src/terminal/ansi.ts
 var ansi = {
   hideCursor: "\x1B[?25l",
   showCursor: "\x1B[?25h",
@@ -656,7 +726,7 @@ var theme = {
   star: colour([232, 180, 70], 33)
 };
 
-// src/core/ui.ts
+// src/ui/widgets.ts
 var ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 var ANSI_AT_START = /^\x1b\[[0-9;?]*[A-Za-z]/;
 var ZERO_WIDTH = /^[\p{Mn}\p{Me}​-‏⁠︎️]$/u;
@@ -723,7 +793,7 @@ var TextInput = class {
   }
 };
 
-// src/core/overlay.ts
+// src/ui/list-panel.ts
 var SORT_ORDERS = ["newest", "most-used", "recent"];
 var SORT_LABEL = { newest: "newest first", "most-used": "most used", recent: "recently used" };
 var nextSort = (order) => SORT_ORDERS[(SORT_ORDERS.indexOf(order) + 1) % SORT_ORDERS.length];
@@ -1081,7 +1151,7 @@ var Overlay = class {
   }
 };
 
-// src/core/savepicker.ts
+// src/ui/save-picker.ts
 var SavePicker = class {
   constructor(draft, shelves, starred = []) {
     this.draft = draft;
@@ -1153,7 +1223,7 @@ var SavePicker = class {
   }
 };
 
-// src/core/layout.ts
+// src/ui/layout.ts
 var PANEL_MAX_ROWS = 11;
 var FALLBACK_BOTTOM_GAP = 4;
 var TOAST_BOTTOM_GAP = 3;
@@ -1173,7 +1243,7 @@ function toastRow(input) {
   return above < 0 ? Math.max(0, input.rows - TOAST_BOTTOM_GAP) : above;
 }
 
-// src/core/inject.ts
+// src/terminal/inject.ts
 var PASTE_START2 = "\x1B[200~";
 var PASTE_END2 = "\x1B[201~";
 var yieldTick = () => new Promise((r) => setTimeout(r, 0));
@@ -1187,7 +1257,7 @@ async function injectPaste(target, text, chunkSize = 512) {
   target.write(PASTE_END2);
 }
 
-// src/core/pastes.ts
+// src/terminal/pastes.ts
 var PASTE_START3 = "\x1B[200~";
 var PASTE_END3 = "\x1B[201~";
 var PasteRecorder = class {
@@ -1319,7 +1389,7 @@ var PasteTracker = class {
   }
 };
 
-// src/app.ts
+// src/session/run.ts
 var TOAST_MS = 3e3;
 var ESC_FLUSH_MS = 25;
 var PASTE_CHECK_MS = 100;
@@ -1611,10 +1681,10 @@ async function runApp(opts) {
   });
 }
 
-// src/cli.ts
+// src/cli/main.ts
 import { existsSync as existsSync2 } from "fs";
 import { basename as basename2, join as join4 } from "path";
-var { version } = createRequire2(import.meta.url)("../package.json");
+var { version } = package_default;
 var SHELF_ACTIONS = ["new", "rename", "rm", "star"];
 var SHELF_USAGE = "usage: stash shelf new <name> | rename <old> <new> | star <name> | rm <name> [--force]";
 function parseFlags(command, args, allowed) {

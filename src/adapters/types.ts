@@ -1,6 +1,6 @@
-import type { PasteLabel } from '../core/pastes.js';
-import type { Skill } from '../core/skills.js';
-import type { Cursor } from '../core/screen.js';
+import type { PasteLabel } from '../terminal/pastes.js';
+import type { Skill } from './skill-files.js';
+import type { Cursor } from '../terminal/screen.js';
 
 export interface Draft {
   text: string;
