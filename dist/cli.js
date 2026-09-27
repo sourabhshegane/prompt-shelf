@@ -11,7 +11,7 @@ import {
   shimDir,
   shimDirOnPath,
   stripShimDir
-} from "./chunk-5VLKRCFM.js";
+} from "./chunk-7PC6T3GB.js";
 
 // src/cli.ts
 import { createRequire as createRequire2 } from "module";

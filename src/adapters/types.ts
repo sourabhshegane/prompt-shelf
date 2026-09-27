@@ -9,7 +9,7 @@ export interface AgentAdapter {
   name: string;
   command: string;
   readDraft(lines: string[], cursor: Cursor, cols?: number): Draft | null;
-  /** The empty input box shows a faint placeholder that must not be read as a draft. */
+  /** The empty input box shows a faint placeholder (e.g. `Try "refactor <filepath>"`) that must not be read as a draft. */
   dimPlaceholder?: boolean;
   unsafeDraft: RegExp;
   /** Placeholder the agent shows for a collapsed paste; lets a stash keep the real text. */

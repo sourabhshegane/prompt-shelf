@@ -89,3 +89,15 @@ describe('claudeAdapter.isBorder', () => {
     expect(claudeAdapter.isBorder('> draft')).toBe(false);
   });
 });
+
+describe('claudeAdapter placeholder', () => {
+  it('ignores the dimmed placeholder Claude Code shows in an empty box', async () => {
+    const { Screen } = await import('../../src/core/screen.js');
+    const screen = new Screen(60, 3);
+    await screen.write('\x1b[1;1H❯ \x1b[2mTry "refactor <filepath>"\x1b[0m\x1b[1;3H');
+    const lines = screen.lines({ dropDim: claudeAdapter.dimPlaceholder });
+    expect(claudeAdapter.readDraft(lines, screen.cursor(), 60)).toBeNull();
+    await screen.write('fix the build');
+    expect(claudeAdapter.readDraft(screen.lines({ dropDim: claudeAdapter.dimPlaceholder }), screen.cursor(), 60)).toEqual({ text: 'fix the build' });
+  });
+});

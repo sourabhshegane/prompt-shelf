@@ -48,6 +48,7 @@ var claudeAdapter = {
   command: "claude",
   reservedKeys: ["ctrl+s", "ctrl+g", "ctrl+t", "ctrl+o", "ctrl+r", "ctrl+l", "ctrl+j", "ctrl+v", "ctrl+x", "ctrl+b", "ctrl+e", "ctrl+c", "ctrl+d"],
   readDraft: (lines, cursor, cols) => readMarkedDraft(lines, cursor, spec, cols),
+  dimPlaceholder: true,
   unsafeDraft: /\[Pasted text #\d+/,
   pasteLabel: { pattern: /\[Pasted text #(\d+)(?: \+\d+ lines?)?\]/g, key: "number" },
   clearDraft: backspaceClear,
@@ -229,4 +230,4 @@ export {
   describeInstall,
   describeRemove
 };
-//# sourceMappingURL=chunk-5VLKRCFM.js.map
+//# sourceMappingURL=chunk-7PC6T3GB.js.map
