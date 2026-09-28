@@ -13,15 +13,15 @@ const layerOf = (file: string) => (file.includes('/') ? file.split('/')[0]! : fi
 const ALLOWED: Record<string, string[]> = {
   errors: [],
   debug: ['storage'],
-  domain: ['errors'],
-  terminal: ['errors'],
-  system: ['errors'],
-  storage: ['domain', 'errors', 'debug'],
-  adapters: ['domain', 'terminal', 'errors'],
+  domain: ['errors', 'i18n'],
+  terminal: ['errors', 'i18n'],
+  system: ['errors', 'i18n'],
+  storage: ['domain', 'errors', 'debug', 'i18n'],
+  adapters: ['domain', 'terminal', 'errors', 'i18n'],
   ui: ['domain', 'terminal', 'errors', 'i18n'],
   i18n: [],
   session: ['adapters', 'domain', 'storage', 'terminal', 'system', 'ui', 'errors', 'debug', 'i18n'],
-  'shims-entry': ['adapters', 'system'],
+  'shims-entry': ['adapters', 'system', 'i18n'],
   cli: ['adapters', 'domain', 'storage', 'terminal', 'system', 'session', 'errors', 'debug', 'shims-entry', 'i18n'],
 };
 
