@@ -1,16 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { Overlay, type OverlayOptions, type Row } from '../../src/ui/list-panel.js';
-import { stripAnsi, visibleWidth } from '../../src/ui/widgets.js';
-import type { Prompt } from '../../src/storage/prompt-store.js';
+import { ListPanel, type ListPanelOptions, type Row } from '../../src/ui/list-panel.js';
+import { stripAnsi, visibleWidth } from '../../src/terminal/text.js';
+import type { Prompt } from '../../src/domain/prompt.js';
 
 const p = (id: string, text: string, extra: Partial<Prompt> = {}): Prompt => ({ id, text, agent: 'claude', cwd: '/repo/' + id, createdAt: '2026-09-18T10:00:00Z', ...extra });
 const drafts = [p('1', 'first idea'), p('2', 'second thought'), p('3', 'third\nmultiline')];
 // Most tests look at every draft, whichever folder it came from.
-const open = (prompts: Prompt[] = drafts, options: Partial<OverlayOptions> = {}) => new Overlay(prompts, { cwd: '/', scope: 'all', ...options });
-const ids = (o: Overlay) => o.visible().map((r: Row) => (r.kind === 'prompt' ? r.prompt.id : r.skill.name));
-const lines = (o: Overlay, cols: number, rows: number) => o.render(cols, rows).split('\r\n');
+const open = (prompts: Prompt[] = drafts, options: Partial<ListPanelOptions> = {}) => new ListPanel(prompts, { hotkeyLabel: 'ctrl+f', cwd: '/', scope: 'all', ...options });
+const ids = (o: ListPanel) => o.visible().map((r: Row) => (r.kind === 'prompt' ? r.prompt.id : r.skill.name));
+const lines = (o: ListPanel, cols: number, rows: number) => o.render(cols, rows).split('\r\n');
 
-describe('Overlay keys', () => {
+describe('ListPanel keys', () => {
   it('starts on the first draft and pops it on Enter', () => {
     expect(open().handleKey('\r')).toEqual({ type: 'pop', prompt: drafts[0] });
   });
@@ -95,7 +95,7 @@ describe('Overlay keys', () => {
   });
 });
 
-describe('Overlay rendering', () => {
+describe('ListPanel rendering', () => {
   it('renders exactly the rows asked for, with line breaks in a draft shown as ⏎', () => {
     const frame = lines(open(), 60, 8);
     expect(frame).toHaveLength(8);
@@ -142,7 +142,7 @@ describe('Overlay rendering', () => {
   });
 
   it('says which key to press when nothing is stashed, and what matched nothing', () => {
-    expect(new Overlay([], { cwd: '/', hotkeyLabel: 'f2' }).render(80, 5)).toContain('f2');
+    expect(new ListPanel([], { cwd: '/', hotkeyLabel: 'f2' }).render(80, 5)).toContain('f2');
     const o = open();
     o.handleKey('/');
     o.handleKey('zzz');
@@ -150,10 +150,10 @@ describe('Overlay rendering', () => {
   });
 });
 
-describe('Overlay repo scope', () => {
+describe('ListPanel repo scope', () => {
   const here = [p('h1', 'local one'), p('h2', 'local two')].map((x) => ({ ...x, cwd: '/work/repo/' }));
   const mixed = [here[0]!, drafts[0]!, here[1]!, drafts[1]!, drafts[2]!];
-  const inRepo = (scope?: 'repo' | 'all') => new Overlay(mixed, { cwd: '/work/repo', ...(scope ? { scope } : {}) });
+  const inRepo = (scope?: 'repo' | 'all') => new ListPanel(mixed, { hotkeyLabel: 'ctrl+f', cwd: '/work/repo', ...(scope ? { scope } : {}) });
 
   it('shows this repo by default and every repo after Tab', () => {
     const o = inRepo();
@@ -182,13 +182,13 @@ describe('Overlay repo scope', () => {
   });
 
   it('points to Tab, with the count, when only other repos have drafts', () => {
-    expect(new Overlay(drafts, { cwd: '/elsewhere' }).render(80, 4)).toContain('(3)');
+    expect(new ListPanel(drafts, { hotkeyLabel: 'ctrl+f', cwd: '/elsewhere' }).render(80, 4)).toContain('(3)');
   });
 });
 
-describe('Overlay shelves', () => {
+describe('ListPanel shelves', () => {
   const all = [p('d1', 'a draft', { cwd: '/repo' }), p('c1', 'review this PR', { shelf: 'Common' }), p('c2', 'write tests', { shelf: 'Common' }), p('i1', 'try a cache', { shelf: 'Ideas' })];
-  const withShelves = (options: Partial<OverlayOptions> = {}) => new Overlay(all, { cwd: '/repo', shelves: ['Ideas', 'Common'], ...options });
+  const withShelves = (options: Partial<ListPanelOptions> = {}) => new ListPanel(all, { hotkeyLabel: 'ctrl+f', cwd: '/repo', shelves: ['Ideas', 'Common'], ...options });
 
   it('has a tab for the stash, skills and each shelf, switched with the arrows', () => {
     const o = withShelves();
@@ -219,7 +219,7 @@ describe('Overlay shelves', () => {
 
   it('keeps the current tab in view when the tabs do not fit', () => {
     const many = Array.from({ length: 12 }, (_, i) => `Shelf number ${i}`);
-    const o = new Overlay([], { cwd: '/repo', shelves: many, tab: { kind: 'shelf', name: 'Shelf number 11' } });
+    const o = new ListPanel([], { hotkeyLabel: 'ctrl+f', cwd: '/repo', shelves: many, tab: { kind: 'shelf', name: 'Shelf number 11' } });
     expect(stripAnsi(lines(o, 60, 5)[0]!)).toContain('Shelf number 11');
   });
 
@@ -262,8 +262,9 @@ describe('Overlay shelves', () => {
 
   it('sorts a shelf by newest, most used or recently used with o', () => {
     const used = (id: string, count: number, last: string) => p(id, id, { shelf: 'Common', usedCount: count, lastUsedAt: last });
-    const o = new Overlay([used('a', 1, '2026-09-27T10:00:00Z'), used('b', 9, '2026-09-20T10:00:00Z'), used('c', 4, '2026-09-27T12:00:00Z')], {
+    const o = new ListPanel([used('a', 1, '2026-09-27T10:00:00Z'), used('b', 9, '2026-09-20T10:00:00Z'), used('c', 4, '2026-09-27T12:00:00Z')], {
       cwd: '/r',
+      hotkeyLabel: 'ctrl+f',
       shelves: ['Common'],
       tab: { kind: 'shelf', name: 'Common' },
     });
@@ -277,14 +278,14 @@ describe('Overlay shelves', () => {
   });
 });
 
-describe('Overlay skills', () => {
+describe('ListPanel skills', () => {
   const skills = [
     { name: 'catalyst-calendar', description: 'track upcoming positions and events', source: 'project' as const },
     { name: 'position-sizer', description: 'size a trade', source: 'personal' as const },
   ];
 
   it('lists skills read-only, ranks name matches first, and names the picked one', () => {
-    const o = new Overlay([], { cwd: '/r', skills, tab: { kind: 'skills' } });
+    const o = new ListPanel([], { hotkeyLabel: 'ctrl+f', cwd: '/r', skills, tab: { kind: 'skills' } });
     for (const key of ['s', 'a', 'd', '*', '<', '>']) expect(o.handleKey(key)).toEqual({ type: 'none' });
     o.handleKey('/');
     o.handleKey('position');

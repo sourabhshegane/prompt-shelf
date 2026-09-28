@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { overlayEffect, pickerEffect, type ActionContext } from '../../src/session/actions.js';
+import { listEffect, pickerEffect, type ActionContext } from '../../src/session/actions.js';
 import { Shelves } from '../../src/storage/shelf-store.js';
 import { Store } from '../../src/storage/prompt-store.js';
 
@@ -39,16 +39,16 @@ describe('pickerEffect', () => {
   });
 });
 
-describe('overlayEffect', () => {
+describe('listEffect', () => {
   it('pops a draft: removes it and inserts its text', async () => {
     const prompt = await ctx.store.add({ text: 'later', agent: 'claude', cwd: '/repo' });
-    expect(await overlayEffect(ctx, { type: 'pop', prompt }, false)).toEqual({ close: true, insert: 'later', status: { text: 'popped · 0 left' } });
+    expect(await listEffect(ctx, { type: 'pop', prompt }, false)).toEqual({ close: true, insert: 'later', status: { text: 'popped · 0 left' } });
     expect(await ctx.store.list()).toEqual([]);
   });
 
   it('uses a saved prompt: keeps it and counts the use', async () => {
     const prompt = await ctx.store.add({ text: 'review', agent: 'claude', cwd: '/repo', shelf: 'Common' });
-    const effect = await overlayEffect(ctx, { type: 'use', prompt }, true);
+    const effect = await listEffect(ctx, { type: 'use', prompt }, true);
     expect(effect).toMatchObject({ insert: 'review', status: { text: 'appended · kept on Common' } });
     expect((await ctx.store.list())[0]!.usedCount).toBe(1);
   });
@@ -57,21 +57,21 @@ describe('overlayEffect', () => {
     const prompt = await ctx.store.add({ text: 'gone', agent: 'claude', cwd: '/repo' });
     await ctx.store.remove(prompt.id);
     for (const type of ['pop', 'use', 'delete'] as const) {
-      const effect = await overlayEffect(ctx, { type, prompt }, false);
+      const effect = await listEffect(ctx, { type, prompt }, false);
       expect(effect.insert).toBeUndefined();
       expect(effect.status?.error).toBe(true);
     }
   });
 
   it('opens a new empty shelf, or moves the prompt onto it', async () => {
-    expect(await overlayEffect(ctx, { type: 'create-shelf', name: 'Bugs' }, false)).toMatchObject({ showShelf: 'Bugs' });
+    expect(await listEffect(ctx, { type: 'create-shelf', name: 'Bugs' }, false)).toMatchObject({ showShelf: 'Bugs' });
     const prompt = await ctx.store.add({ text: 'x', agent: 'claude', cwd: '/repo' });
-    await overlayEffect(ctx, { type: 'create-shelf', name: 'Git', prompt }, false);
+    await listEffect(ctx, { type: 'create-shelf', name: 'Git', prompt }, false);
     expect((await ctx.store.list())[0]!.shelf).toBe('Git');
   });
 
   it('says so when a shelf is already at the end', async () => {
     const [first] = await ctx.shelves.list();
-    expect(await overlayEffect(ctx, { type: 'move-shelf', shelf: first!, step: -1 }, false)).toEqual({ status: { text: 'already first' } });
+    expect(await listEffect(ctx, { type: 'move-shelf', shelf: first!, step: -1 }, false)).toEqual({ status: { text: 'already first' } });
   });
 });

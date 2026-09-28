@@ -1,23 +1,7 @@
 import { appendFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { onShelf, type Prompt } from '../domain/prompt.js';
 import { readTextIfExists, withFileLock, writeFileAtomic } from './files.js';
-
-/** A saved prompt: a stash draft (no shelf) or a prompt kept on a shelf. */
-export interface Prompt {
-  id: string;
-  text: string;
-  agent: string;
-  cwd: string;
-  createdAt: string;
-  /** The shelf this prompt is saved on; absent for stash drafts. */
-  shelf?: string;
-  /** How many times the prompt was put in the box while keeping it (shelf prompts, `a` on a draft). */
-  usedCount?: number;
-  lastUsedAt?: string;
-}
-
-export const isStashDraft = (e: Prompt): boolean => e.shelf === undefined;
-export const onShelf = (name: string) => (e: Prompt): boolean => e.shelf?.toLowerCase() === name.toLowerCase();
 
 const isPrompt = (value: unknown): value is Prompt => {
   const v = value as Record<string, unknown> | null;

@@ -1,7 +1,8 @@
+import { ansi } from '../terminal/ansi.js';
 import { splitKeys } from '../terminal/keys.js';
-import { ansi, theme } from '../terminal/ansi.js';
-import { choiceRow, flatten, fitLine, keyHints, TextInput, visibleWidth } from './widgets.js';
-import type { Status } from './list-panel.js';
+import { flatten, visibleWidth } from '../terminal/text.js';
+import type { Panel, Status } from './types.js';
+import { addNewHint, choiceRow, keyHints, panelFrame, shelfLabel, statusLine, styleStar, TextInput } from './widgets.js';
 
 export type PickerAction =
   | { type: 'none' }
@@ -14,7 +15,7 @@ export type PickerAction =
  * What the stash key shows: where to put the draft. The stash is picked by default, so the hotkey
  * then Enter (or the hotkey twice) parks it; ←→ picks a shelf, n makes a new one.
  */
-export class SavePicker {
+export class SavePicker implements Panel<PickerAction> {
   private index = 0;
   private naming: TextInput | null = null;
 
@@ -74,16 +75,13 @@ export class SavePicker {
 
   render(cols: number, rows: number, status?: Status): string {
     const label = ' Save to:';
-    const addNew = `  ${ansi.dim}+ new (${ansi.reset}${ansi.bold}${theme.accent}n${ansi.reset}${ansi.dim})${ansi.reset}`;
-    const names = ['Stash', ...this.shelves.map((s) => (this.starred.includes(s) ? `★ ${s}` : s))];
-    const places = choiceRow(names, this.index, cols - label.length - visibleWidth(addNew) - 1, (l) => l.replace(/^★/, `${theme.star}★${ansi.reset}`));
+    const addNew = addNewHint();
+    const names = ['Stash', ...this.shelves.map((s) => shelfLabel(s, this.starred))];
+    const places = choiceRow(names, this.index, cols - label.length - visibleWidth(addNew) - 1, styleStar);
     let footer: string;
-    if (status) footer = ` ${ansi.bold}${status.error ? theme.error : theme.success}${status.text}${ansi.reset}`;
+    if (status) footer = statusLine(status);
     else if (this.naming) footer = this.naming.render('new shelf name:', 'enter create · esc back');
     else footer = keyHints([['←→', 'choose'], ['enter', 'save'], ['n', 'new shelf'], ['esc', 'cancel']]);
-    const lines = [`${ansi.bold}${label}${ansi.reset}${places}${addNew}`, ` ${ansi.dim}${flatten(this.draft)}${ansi.reset}`].slice(0, Math.max(0, rows - 1));
-    while (lines.length < rows - 1) lines.push('');
-    if (rows > 0) lines.push(footer);
-    return lines.map((l) => ansi.clearLine + fitLine(l, cols)).join('\r\n');
+    return panelFrame([`${ansi.bold}${label}${ansi.reset}${places}${addNew}`, ` ${ansi.dim}${flatten(this.draft)}${ansi.reset}`], footer, cols, rows);
   }
 }

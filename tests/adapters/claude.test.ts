@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { claudeAdapter } from '../../src/adapters/claude.js';
-import { backspaceClear } from '../../src/adapters/types.js';
+import { backspaceClear } from '../../src/adapters/input-box.js';
 
 const fixture = (name: string) => readFileSync(join(import.meta.dirname, 'fixtures', name), 'utf8').split('\n');
 const cursorOnLine = (lines: string[], needle: string) => ({ y: lines.findIndex((l) => l.includes(needle)), x: 0 });

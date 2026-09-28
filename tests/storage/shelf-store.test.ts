@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Shelves, validName, withOrphans } from '../../src/storage/shelf-store.js';
+import { validName, withOrphans } from '../../src/domain/shelf.js';
+import { Shelves } from '../../src/storage/shelf-store.js';
 import { Store } from '../../src/storage/prompt-store.js';
 
 let dir: string;

@@ -1,6 +1,8 @@
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
+import { debug } from '../debug.js';
+import { UserError } from '../errors.js';
 
 const LOCK_RETRY_MS = 15;
 const LOCK_TIMEOUT_MS = 5000;
@@ -24,8 +26,11 @@ export async function withFileLock<T>(file: string, fn: () => Promise<T>): Promi
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       const age = await stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0);
-      if (age > STALE_LOCK_MS) await rm(lock, { force: true });
-      else if (Date.now() > deadline) throw new Error(`${file} is locked by another prompt-shelf session`);
+      if (age > STALE_LOCK_MS) {
+        debug('lock', 'removed a stale lock', { file: lock, ageMs: Math.round(age) });
+        await rm(lock, { force: true });
+      }
+      else if (Date.now() > deadline) throw new UserError(`${file} is locked by another prompt-shelf session`);
       else await sleep(LOCK_RETRY_MS);
     }
   }

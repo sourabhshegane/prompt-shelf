@@ -1,11 +1,6 @@
+import { UserError } from '../errors.js';
 import { readTextIfExists, withFileLock, writeFileAtomic } from './files.js';
-import type { Prompt } from './prompt-store.js';
-
-/** Names the list panel uses for its own tabs, so no shelf can take them. */
-const RESERVED = ['stash', 'skills'];
-const MAX_NAME = 30;
-/** What a new user starts with, until they create, rename, star, move or delete a shelf. */
-const DEFAULT_SHELVES = ['Ideas', 'To explore', 'Common'];
+import { DEFAULT_SHELVES, findShelf, validName } from '../domain/shelf.js';
 
 interface ShelfFile {
   shelves: string[];
@@ -24,7 +19,7 @@ export class Shelves {
     try {
       parsed = JSON.parse(raw) as typeof parsed;
     } catch {
-      throw new Error(`${this.filePath} is damaged; fix or delete it (your prompts are safe in the stash file)`);
+      throw new UserError(`${this.filePath} is damaged; fix or delete it (your prompts are safe in the stash file)`);
     }
     const names = (v: unknown) => (Array.isArray(v) ? v.filter((n): n is string => typeof n === 'string') : []);
     const shelves = names(parsed.shelves);
@@ -54,14 +49,14 @@ export class Shelves {
 
   /** The stored spelling of a shelf name, matched case-insensitively. */
   async find(name: string): Promise<string | undefined> {
-    return findIn((await this.read()).shelves, name);
+    return findShelf((await this.read()).shelves, name);
   }
 
   /** Adds a shelf and returns its name; an existing shelf with that name is returned as is. */
   async create(name: string): Promise<string> {
     const clean = validName(name);
     return this.change((file) => {
-      const existing = findIn(file.shelves, clean);
+      const existing = findShelf(file.shelves, clean);
       if (existing) return existing;
       file.shelves.push(clean);
       return clean;
@@ -72,8 +67,8 @@ export class Shelves {
     const clean = validName(to);
     return this.change((file) => {
       const current = requireIn(file.shelves, from);
-      const clash = findIn(file.shelves, clean);
-      if (clash && clash !== current) throw new Error(`a shelf named "${clash}" already exists`);
+      const clash = findShelf(file.shelves, clean);
+      if (clash && clash !== current) throw new UserError(`a shelf named "${clash}" already exists`);
       const swap = (n: string) => (n === current ? clean : n);
       file.shelves = file.shelves.map(swap);
       file.starred = file.starred.map(swap);
@@ -117,28 +112,8 @@ export class Shelves {
   }
 }
 
-const findIn = (shelves: string[], name: string) => shelves.find((n) => n.toLowerCase() === name.trim().toLowerCase());
-
 function requireIn(shelves: string[], name: string): string {
-  const found = findIn(shelves, name);
-  if (!found) throw new Error(`no shelf named "${name}"`);
+  const found = findShelf(shelves, name);
+  if (!found) throw new UserError(`no shelf named "${name}"`);
   return found;
-}
-
-/**
- * Shelf names to show: the saved ones, plus any shelf that prompts still point at but the shelf file
- * doesn't list (e.g. after a rename was interrupted), so those prompts never become invisible.
- */
-export function withOrphans(shelves: string[], prompts: Prompt[]): string[] {
-  const all = [...shelves];
-  for (const p of prompts) if (p.shelf && !findIn(all, p.shelf)) all.push(p.shelf);
-  return all;
-}
-
-export function validName(name: string): string {
-  const clean = name.trim().replace(/\s+/g, ' ');
-  if (!clean) throw new Error('a shelf needs a name');
-  if ([...clean].length > MAX_NAME) throw new Error(`shelf names can be at most ${MAX_NAME} characters`);
-  if (RESERVED.includes(clean.toLowerCase())) throw new Error(`"${clean}" is reserved; pick another name`);
-  return clean;
 }

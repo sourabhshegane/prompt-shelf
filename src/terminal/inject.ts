@@ -1,9 +1,9 @@
+import { PASTE_END, PASTE_START } from './sequences.js';
+
 export interface Writable {
   write(data: string): void;
 }
 
-const PASTE_START = '\x1b[200~';
-const PASTE_END = '\x1b[201~';
 
 const yieldTick = () => new Promise<void>((r) => setTimeout(r, 0));
 

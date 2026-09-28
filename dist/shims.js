@@ -1,27 +1,15 @@
 import {
   describeInstall,
   describeRemove,
-  findRealBinary,
   installShims,
   pathHint,
-  rcLineFor,
-  removeShims,
-  shimDir,
-  shimDirFor,
-  shimDirOnPath,
-  stripShimDir
-} from "./chunk-IHS52UKW.js";
+  removeShims
+} from "./chunk-GH7BL566.js";
 export {
   describeInstall,
   describeRemove,
-  findRealBinary,
   installShims,
   pathHint,
-  rcLineFor,
-  removeShims,
-  shimDir,
-  shimDirFor,
-  shimDirOnPath,
-  stripShimDir
+  removeShims
 };
 //# sourceMappingURL=shims.js.map

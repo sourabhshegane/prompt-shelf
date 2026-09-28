@@ -1,12 +1,5 @@
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { configFile } from './paths.js';
 import { readTextIfExists, withFileLock, writeFileAtomic } from './files.js';
-
-// PROMPT_SHELF_DIR keeps the stash, shelves and settings somewhere else, e.g. for testing.
-export const stashDir = process.env.PROMPT_SHELF_DIR || join(homedir(), '.prompt-shelf');
-export const stashFile = join(stashDir, 'stash.jsonl');
-export const configFile = join(stashDir, 'config.json');
-export const shelvesFile = join(stashDir, 'shelves.json');
 
 export interface Config {
   /** Asks where to save what is in the box (the stash, or a shelf). */
@@ -15,7 +8,8 @@ export interface Config {
   listHotkey: string;
 }
 
-const defaults: Config = { hotkey: 'ctrl+f', listHotkey: 'ctrl+q' };
+/** The only place the default hotkeys are written down. */
+export const DEFAULT_CONFIG: Readonly<Config> = { hotkey: 'ctrl+f', listHotkey: 'ctrl+q' };
 
 async function readRaw(filePath: string): Promise<Record<string, unknown>> {
   const raw = await readTextIfExists(filePath);
@@ -30,9 +24,10 @@ async function readRaw(filePath: string): Promise<Record<string, unknown>> {
 
 export async function loadConfig(filePath = configFile): Promise<Config> {
   const raw = await readRaw(filePath);
-  return { ...defaults, ...(raw as Partial<Config>) };
+  return { ...DEFAULT_CONFIG, ...(raw as Partial<Config>) };
 }
 
+/** Merges `partial` into the file, keeping keys this version doesn't know about. */
 export async function saveConfig(partial: Partial<Config>, filePath = configFile): Promise<void> {
   await withFileLock(filePath, async () => {
     const merged = { ...(await readRaw(filePath)), ...partial };

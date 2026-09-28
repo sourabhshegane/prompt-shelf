@@ -1,5 +1,8 @@
-const PASTE_START = Buffer.from('\x1b[200~');
-const PASTE_END = Buffer.from('\x1b[201~');
+import { UserError } from '../errors.js';
+import { PASTE_END as PASTE_END_TEXT, PASTE_START as PASTE_START_TEXT } from './sequences.js';
+
+const PASTE_START = Buffer.from(PASTE_START_TEXT);
+const PASTE_END = Buffer.from(PASTE_END_TEXT);
 
 const FUNCTION_KEYS: Record<string, string[]> = {
   f1: ['\x1bOP', '\x1b[11~'],
@@ -33,7 +36,7 @@ export function parseHotkey(spec: string): Hotkey {
   }
   const fkey = FUNCTION_KEYS[label];
   if (fkey) return { label, sequences: fkey.map((s) => Buffer.from(s, 'latin1')) };
-  throw new Error(`Unsupported hotkey "${spec}". Use ctrl+<letter> or f1..f12.`);
+  throw new UserError(`Unsupported hotkey "${spec}". Use ctrl+<letter> or f1..f12.`);
 }
 
 /** Strips any of the given hotkeys from input; each press reports the index of the hotkey that fired. */

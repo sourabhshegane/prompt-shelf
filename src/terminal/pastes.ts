@@ -1,5 +1,4 @@
-const PASTE_START = '\x1b[200~';
-const PASTE_END = '\x1b[201~';
+import { PASTE_END, PASTE_START } from './sequences.js';
 
 /** Collects the bracketed pastes in the text forwarded to the agent. */
 export class PasteRecorder {

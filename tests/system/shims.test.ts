@@ -4,7 +4,12 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { findRealBinary, installShims, removeShims, shimDirFor, stripShimDir } from '../../src/system/shims.js';
+import { findRealBinary, shimDirFor, stripShimDir } from '../../src/system/binaries.js';
+import * as shims from '../../src/system/shims.js';
+
+const AGENTS = ['claude', 'codex'];
+const installShims = (env: Record<string, string | undefined>) => shims.installShims(AGENTS, env);
+const removeShims = (env: Record<string, string | undefined>) => shims.removeShims(AGENTS, env);
 
 const unix = process.platform !== 'win32';
 

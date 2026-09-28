@@ -1,50 +1,12 @@
-import { accessSync, constants, statSync } from 'node:fs';
+import { accessSync, constants } from 'node:fs';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { basename, delimiter, dirname, join, resolve } from 'node:path';
-import { adapterNames } from '../adapters/index.js';
+import { basename, dirname, join } from 'node:path';
+import { findRealBinary, homeFor, shimDirFor, win32, type Env } from './binaries.js';
+
+// Shims: tiny scripts named like each agent (`claude`, `codex`, …) that run it through `stash`,
+// plus the PATH line in the user's shell rc file that puts them first.
 
 const MARKER = '# prompt-shelf';
-const win32 = process.platform === 'win32';
-
-type Env = Record<string, string | undefined>;
-
-const homeFor = (env: Env) => env.HOME ?? env.USERPROFILE ?? homedir();
-
-export const shimDirFor = (env: Env): string => join(homeFor(env), '.prompt-shelf', 'bin');
-export const shimDir = shimDirFor(process.env);
-
-const isShimDir = (entry: string, env: Env) => resolve(entry) === resolve(shimDirFor(env));
-
-export const shimDirOnPath = (env: Env = process.env): boolean => (env.PATH ?? '').split(delimiter).some((entry) => entry && isShimDir(entry, env));
-
-export function stripShimDir(path: string | undefined, env: Env = process.env): string {
-  return (path ?? '')
-    .split(delimiter)
-    .filter((entry) => !entry || !isShimDir(entry, env))
-    .join(delimiter);
-}
-
-const isExecutableFile = (file: string) => {
-  try {
-    if (!statSync(file).isFile()) return false;
-    if (!win32) accessSync(file, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-export function findRealBinary(name: string, env: Env = process.env): string | null {
-  const exts = win32 ? [...(env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';'), ''] : [''];
-  for (const entry of stripShimDir(env.PATH, env).split(delimiter)) {
-    for (const ext of exts) {
-      const candidate = join(entry, name + ext);
-      if (isExecutableFile(candidate)) return candidate;
-    }
-  }
-  return null;
-}
 
 const shimFileName = (name: string) => (win32 ? `${name}.cmd` : name);
 const posixShim = (name: string) =>
@@ -119,11 +81,12 @@ export interface RemoveResult {
   rcChanged: boolean;
 }
 
-export async function installShims(env: Env = process.env): Promise<InstallResult> {
+/** Writes a shim for each of `commands` that is installed, and adds the PATH line. */
+export async function installShims(commands: readonly string[], env: Env = process.env): Promise<InstallResult> {
   const dir = shimDirFor(env);
   await mkdir(dir, { recursive: true });
   const shims: string[] = [];
-  for (const name of adapterNames) {
+  for (const name of commands) {
     if (!findRealBinary(name, env)) continue;
     const file = join(dir, shimFileName(name));
     await writeFile(file, shimContent(name));
@@ -137,10 +100,10 @@ export async function installShims(env: Env = process.env): Promise<InstallResul
   return { shims, rcFile: rc.files[0] ?? null, rcChanged };
 }
 
-export async function removeShims(env: Env = process.env): Promise<RemoveResult> {
+export async function removeShims(commands: readonly string[], env: Env = process.env): Promise<RemoveResult> {
   const dir = shimDirFor(env);
   const removed: string[] = [];
-  for (const name of adapterNames) {
+  for (const name of commands) {
     const file = join(dir, shimFileName(name));
     if (!isReadable(file)) continue;
     await rm(file, { force: true });
@@ -158,9 +121,9 @@ export const pathHint = (env: Env = process.env): string =>
     ? `add ${shimDirFor(env)} to the front of your PATH (System Properties → Environment Variables), then open a new terminal`
     : `add this line to your shell rc file, then open a new terminal:\n  ${rcLineFor(basename(env.SHELL ?? ''))}`;
 
-export function describeInstall(result: InstallResult, env: Env = process.env): string[] {
+export function describeInstall(result: InstallResult, commands: readonly string[], env: Env = process.env): string[] {
   const lines = result.shims.map((shim) => `shim: ${shim}`);
-  if (!result.shims.length) lines.push(`no supported agents (${adapterNames.join(', ')}) found on PATH; run \`stash enable\` after installing one`);
+  if (!result.shims.length) lines.push(`no supported agents (${commands.join(', ')}) found on PATH; run \`stash enable\` after installing one`);
   if (result.rcFile) lines.push(result.rcChanged ? `PATH: added to ${result.rcFile} (open a new terminal)` : `PATH: already configured in ${result.rcFile}`);
   else lines.push(`PATH: ${pathHint(env)}`);
   return lines;

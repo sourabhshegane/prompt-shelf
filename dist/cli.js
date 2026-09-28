@@ -1,18 +1,28 @@
 import {
+  PASTE_END,
+  PASTE_START,
   adapterNames,
+  allAdapters,
+  clip,
   describeInstall,
   describeRemove,
   findRealBinary,
+  fitLine,
+  flatten,
   getAdapter,
   installShims,
+  isCmdScript,
+  padCells,
   pathHint,
   removeShims,
   reservedBy,
   scoped,
   shimDir,
   shimDirOnPath,
-  stripShimDir
-} from "./chunk-IHS52UKW.js";
+  stripShimDir,
+  truncateLine,
+  visibleWidth
+} from "./chunk-GH7BL566.js";
 
 // package.json
 var package_default = {
@@ -87,21 +97,60 @@ var package_default = {
   }
 };
 
-// src/storage/config.ts
+// src/errors.ts
+var UserError = class extends Error {
+  constructor(message, exitCode = 1) {
+    super(message);
+    this.exitCode = exitCode;
+    this.name = "UserError";
+  }
+  exitCode;
+};
+var describeError = (err) => err instanceof Error ? err.message : String(err);
+
+// src/debug.ts
+import { appendFileSync, mkdirSync } from "fs";
+import { dirname, join as join2 } from "path";
+
+// src/storage/paths.ts
 import { homedir } from "os";
 import { join } from "path";
+function dataDir(env = process.env) {
+  return env.PROMPT_SHELF_DIR || join(homedir(), ".prompt-shelf");
+}
+var stashDir = dataDir();
+var promptsFile = join(stashDir, "stash.jsonl");
+var shelvesFile = join(stashDir, "shelves.json");
+var configFile = join(stashDir, "config.json");
+
+// src/debug.ts
+function debugLogFile(env = process.env) {
+  const setting = env.PROMPT_SHELF_DEBUG;
+  if (!setting || setting === "0") return null;
+  return setting === "1" || setting.toLowerCase() === "true" ? join2(dataDir(env), "debug.log") : setting;
+}
+var file = debugLogFile();
+function debug(area, message, data) {
+  if (!file) return;
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, `${(/* @__PURE__ */ new Date()).toISOString()} ${area} ${message}${data ? " " + JSON.stringify(data) : ""}
+`);
+  } catch {
+  }
+}
 
 // src/storage/files.ts
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
 import { randomUUID } from "crypto";
-import { dirname } from "path";
+import { dirname as dirname2 } from "path";
 var LOCK_RETRY_MS = 15;
 var LOCK_TIMEOUT_MS = 5e3;
 var STALE_LOCK_MS = 1e4;
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function withFileLock(file, fn) {
-  const lock = `${file}.lock`;
-  await mkdir(dirname(file), { recursive: true, mode: 448 });
+async function withFileLock(file2, fn) {
+  const lock = `${file2}.lock`;
+  await mkdir(dirname2(file2), { recursive: true, mode: 448 });
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   for (; ; ) {
     try {
@@ -110,8 +159,10 @@ async function withFileLock(file, fn) {
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
       const age = await stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0);
-      if (age > STALE_LOCK_MS) await rm(lock, { force: true });
-      else if (Date.now() > deadline) throw new Error(`${file} is locked by another prompt-shelf session`);
+      if (age > STALE_LOCK_MS) {
+        debug("lock", "removed a stale lock", { file: lock, ageMs: Math.round(age) });
+        await rm(lock, { force: true });
+      } else if (Date.now() > deadline) throw new UserError(`${file2} is locked by another prompt-shelf session`);
       else await sleep(LOCK_RETRY_MS);
     }
   }
@@ -121,15 +172,15 @@ async function withFileLock(file, fn) {
     await rm(lock, { force: true });
   }
 }
-async function writeFileAtomic(file, content) {
-  await mkdir(dirname(file), { recursive: true, mode: 448 });
-  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+async function writeFileAtomic(file2, content) {
+  await mkdir(dirname2(file2), { recursive: true, mode: 448 });
+  const tmp = `${file2}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(tmp, content, "utf8");
-  await rename(tmp, file);
+  await rename(tmp, file2);
 }
-async function readTextIfExists(file) {
+async function readTextIfExists(file2) {
   try {
-    return await readFile(file, "utf8");
+    return await readFile(file2, "utf8");
   } catch (err) {
     if (err.code === "ENOENT") return null;
     throw err;
@@ -137,11 +188,7 @@ async function readTextIfExists(file) {
 }
 
 // src/storage/config.ts
-var stashDir = process.env.PROMPT_SHELF_DIR || join(homedir(), ".prompt-shelf");
-var stashFile = join(stashDir, "stash.jsonl");
-var configFile = join(stashDir, "config.json");
-var shelvesFile = join(stashDir, "shelves.json");
-var defaults = { hotkey: "ctrl+f", listHotkey: "ctrl+q" };
+var DEFAULT_CONFIG = { hotkey: "ctrl+f", listHotkey: "ctrl+q" };
 async function readRaw(filePath) {
   const raw = await readTextIfExists(filePath);
   if (!raw) return {};
@@ -154,7 +201,7 @@ async function readRaw(filePath) {
 }
 async function loadConfig(filePath = configFile) {
   const raw = await readRaw(filePath);
-  return { ...defaults, ...raw };
+  return { ...DEFAULT_CONFIG, ...raw };
 }
 async function saveConfig(partial, filePath = configFile) {
   await withFileLock(filePath, async () => {
@@ -163,135 +210,22 @@ async function saveConfig(partial, filePath = configFile) {
   });
 }
 
-// src/terminal/keys.ts
-var PASTE_START = Buffer.from("\x1B[200~");
-var PASTE_END = Buffer.from("\x1B[201~");
-var FUNCTION_KEYS = {
-  f1: ["\x1BOP", "\x1B[11~"],
-  f2: ["\x1BOQ", "\x1B[12~"],
-  f3: ["\x1BOR", "\x1B[13~"],
-  f4: ["\x1BOS", "\x1B[14~"],
-  f5: ["\x1B[15~"],
-  f6: ["\x1B[17~"],
-  f7: ["\x1B[18~"],
-  f8: ["\x1B[19~"],
-  f9: ["\x1B[20~"],
-  f10: ["\x1B[21~"],
-  f11: ["\x1B[23~"],
-  f12: ["\x1B[24~"]
-};
-function parseHotkey(spec) {
-  const label = spec.trim().toLowerCase();
-  const ctrl = /^ctrl\+([a-z])$/.exec(label);
-  if (ctrl) {
-    const letter = ctrl[1];
-    return {
-      label,
-      sequences: [Buffer.from([letter.toUpperCase().charCodeAt(0) - 64]), Buffer.from(`\x1B[${letter.charCodeAt(0)};5u`)]
-    };
-  }
-  const fkey = FUNCTION_KEYS[label];
-  if (fkey) return { label, sequences: fkey.map((s) => Buffer.from(s, "latin1")) };
-  throw new Error(`Unsupported hotkey "${spec}". Use ctrl+<letter> or f1..f12.`);
-}
-var KeyInterceptor = class {
-  inPaste = false;
-  pending = Buffer.alloc(0);
-  escaped;
-  owner = /* @__PURE__ */ new Map();
-  singles = /* @__PURE__ */ new Map();
-  constructor(hotkeys) {
-    const list = Array.isArray(hotkeys) ? hotkeys : [hotkeys];
-    list.forEach((hotkey, index) => {
-      for (const seq of hotkey.sequences) {
-        if (seq.length === 1) this.singles.set(seq[0], index);
-        else this.owner.set(seq, index);
-      }
-    });
-    this.escaped = [...this.owner.keys()].filter((s) => s[0] === 27);
-  }
-  get hasPending() {
-    return this.pending.length > 0;
-  }
-  flush() {
-    const out = this.pending;
-    this.pending = Buffer.alloc(0);
-    return out;
-  }
-  feed(chunk) {
-    const data = Buffer.concat([this.pending, chunk]);
-    this.pending = Buffer.alloc(0);
-    const out = [];
-    const presses = [];
-    let i = 0;
-    while (i < data.length) {
-      if (data[i] === 27) {
-        const marker = this.matchPrefix(data, i, [PASTE_START, PASTE_END, ...this.escaped]);
-        if (marker === "partial") {
-          this.pending = data.subarray(i);
-          break;
-        }
-        if (marker === PASTE_START || marker === PASTE_END) {
-          this.inPaste = marker === PASTE_START;
-          for (let j = 0; j < marker.length; j++) out.push(data[i + j]);
-          i += marker.length;
-          continue;
-        }
-        if (marker && !this.inPaste) {
-          presses.push(this.owner.get(marker));
-          i += marker.length;
-          continue;
-        }
-      }
-      const single = this.inPaste ? void 0 : this.singles.get(data[i]);
-      if (single !== void 0) {
-        presses.push(single);
-        i++;
-        continue;
-      }
-      out.push(data[i]);
-      i++;
-    }
-    return { passthrough: Buffer.from(out), presses };
-  }
-  matchPrefix(data, at, candidates) {
-    for (const marker of candidates) {
-      const avail = data.subarray(at, at + marker.length);
-      if (avail.equals(marker)) return marker;
-      if (avail.length < marker.length && marker.subarray(0, avail.length).equals(avail)) return "partial";
-    }
-    return null;
-  }
-};
-var CSI_U = /^\x1b\[(\d+)(?:;(\d+))?u$/;
-function normalizeKey(key) {
-  const m = CSI_U.exec(key);
-  if (!m) return key;
-  const code = Number(m[1]);
-  const mods = Number(m[2] ?? "1");
-  if (mods !== 1) return key;
-  if (code === 27) return "\x1B";
-  if (code === 13) return "\r";
-  if (code === 127) return "\x7F";
-  return String.fromCodePoint(code);
-}
-var ESCAPE_SEQUENCE = /^\x1b(?:\[[0-9;?]*[@-~]|O.)/;
-function splitKeys(chunk) {
-  const keys = [];
-  for (let i = 0; i < chunk.length; ) {
-    const seq = chunk[i] === "\x1B" ? ESCAPE_SEQUENCE.exec(chunk.slice(i)) : null;
-    const key = seq ? seq[0] : String.fromCodePoint(chunk.codePointAt(i));
-    keys.push(normalizeKey(key));
-    i += key.length;
-  }
-  return keys;
-}
-
 // src/storage/prompt-store.ts
 import { appendFile } from "fs/promises";
 import { randomUUID as randomUUID2 } from "crypto";
-var isStashDraft = (e) => e.shelf === void 0;
-var onShelf = (name) => (e) => e.shelf?.toLowerCase() === name.toLowerCase();
+
+// src/domain/prompt.ts
+var isStashDraft = (p) => p.shelf === void 0;
+var onShelf = (name) => (p) => p.shelf?.toLowerCase() === name.toLowerCase();
+var SORT_ORDERS = ["newest", "most-used", "recent"];
+var nextSort = (order) => SORT_ORDERS[(SORT_ORDERS.indexOf(order) + 1) % SORT_ORDERS.length];
+function sortSaved(prompts, order) {
+  if (order === "most-used") return [...prompts].sort((a, b) => (b.usedCount ?? 0) - (a.usedCount ?? 0));
+  if (order === "recent") return [...prompts].sort((a, b) => (b.lastUsedAt ?? "").localeCompare(a.lastUsedAt ?? ""));
+  return prompts;
+}
+
+// src/storage/prompt-store.ts
 var isPrompt = (value) => {
   const v = value;
   return typeof v === "object" && v !== null && ["id", "text", "agent", "cwd", "createdAt"].every((k) => typeof v[k] === "string") && (v.shelf === void 0 || typeof v.shelf === "string");
@@ -380,10 +314,25 @@ var Store = class {
   }
 };
 
-// src/storage/shelf-store.ts
-var RESERVED = ["stash", "skills"];
-var MAX_NAME = 30;
+// src/domain/shelf.ts
+var RESERVED_SHELF_NAMES = ["stash", "skills"];
+var MAX_SHELF_NAME = 30;
 var DEFAULT_SHELVES = ["Ideas", "To explore", "Common"];
+var findShelf = (shelves, name) => shelves.find((n) => n.toLowerCase() === name.trim().toLowerCase());
+function validName(name) {
+  const clean = name.trim().replace(/\s+/g, " ");
+  if (!clean) throw new UserError("a shelf needs a name");
+  if ([...clean].length > MAX_SHELF_NAME) throw new UserError(`shelf names can be at most ${MAX_SHELF_NAME} characters`);
+  if (RESERVED_SHELF_NAMES.includes(clean.toLowerCase())) throw new UserError(`"${clean}" is reserved; pick another name`);
+  return clean;
+}
+function withOrphans(shelves, prompts) {
+  const all = [...shelves];
+  for (const p of prompts) if (p.shelf && !findShelf(all, p.shelf)) all.push(p.shelf);
+  return all;
+}
+
+// src/storage/shelf-store.ts
 var Shelves = class {
   constructor(filePath) {
     this.filePath = filePath;
@@ -397,7 +346,7 @@ var Shelves = class {
     try {
       parsed = JSON.parse(raw);
     } catch {
-      throw new Error(`${this.filePath} is damaged; fix or delete it (your prompts are safe in the stash file)`);
+      throw new UserError(`${this.filePath} is damaged; fix or delete it (your prompts are safe in the stash file)`);
     }
     const names = (v) => Array.isArray(v) ? v.filter((n) => typeof n === "string") : [];
     const shelves = names(parsed.shelves);
@@ -406,9 +355,9 @@ var Shelves = class {
   // Read, change and save under a lock, so sessions and quick key presses never lose each other's changes.
   async change(edit) {
     return withFileLock(this.filePath, async () => {
-      const file = await this.read();
-      const result = edit(file);
-      await writeFileAtomic(this.filePath, JSON.stringify(file, null, 2) + "\n");
+      const file2 = await this.read();
+      const result = edit(file2);
+      await writeFileAtomic(this.filePath, JSON.stringify(file2, null, 2) + "\n");
       return result;
     });
   }
@@ -422,43 +371,43 @@ var Shelves = class {
   }
   /** The stored spelling of a shelf name, matched case-insensitively. */
   async find(name) {
-    return findIn((await this.read()).shelves, name);
+    return findShelf((await this.read()).shelves, name);
   }
   /** Adds a shelf and returns its name; an existing shelf with that name is returned as is. */
   async create(name) {
     const clean = validName(name);
-    return this.change((file) => {
-      const existing = findIn(file.shelves, clean);
+    return this.change((file2) => {
+      const existing = findShelf(file2.shelves, clean);
       if (existing) return existing;
-      file.shelves.push(clean);
+      file2.shelves.push(clean);
       return clean;
     });
   }
   async rename(from, to) {
     const clean = validName(to);
-    return this.change((file) => {
-      const current = requireIn(file.shelves, from);
-      const clash = findIn(file.shelves, clean);
-      if (clash && clash !== current) throw new Error(`a shelf named "${clash}" already exists`);
+    return this.change((file2) => {
+      const current = requireIn(file2.shelves, from);
+      const clash = findShelf(file2.shelves, clean);
+      if (clash && clash !== current) throw new UserError(`a shelf named "${clash}" already exists`);
       const swap = (n) => n === current ? clean : n;
-      file.shelves = file.shelves.map(swap);
-      file.starred = file.starred.map(swap);
+      file2.shelves = file2.shelves.map(swap);
+      file2.starred = file2.starred.map(swap);
       return clean;
     });
   }
   async remove(name) {
-    await this.change((file) => {
-      const current = requireIn(file.shelves, name);
-      file.shelves = file.shelves.filter((n) => n !== current);
-      file.starred = file.starred.filter((n) => n !== current);
+    await this.change((file2) => {
+      const current = requireIn(file2.shelves, name);
+      file2.shelves = file2.shelves.filter((n) => n !== current);
+      file2.starred = file2.starred.filter((n) => n !== current);
     });
   }
   /** Stars or unstars a shelf; returns whether it is starred now. */
   async toggleStar(name) {
-    return this.change((file) => {
-      const current = requireIn(file.shelves, name);
-      const starred = !file.starred.includes(current);
-      file.starred = starred ? [...file.starred, current] : file.starred.filter((n) => n !== current);
+    return this.change((file2) => {
+      const current = requireIn(file2.shelves, name);
+      const starred = !file2.starred.includes(current);
+      file2.starred = starred ? [...file2.starred, current] : file2.starred.filter((n) => n !== current);
       return starred;
     });
   }
@@ -467,116 +416,108 @@ var Shelves = class {
    * stay in their own groups, so a move never crosses between them. Returns whether it moved.
    */
   async move(name, step) {
-    return this.change((file) => {
-      const current = requireIn(file.shelves, name);
-      const group = file.shelves.filter((n) => file.starred.includes(n) === file.starred.includes(current));
+    return this.change((file2) => {
+      const current = requireIn(file2.shelves, name);
+      const group = file2.shelves.filter((n) => file2.starred.includes(n) === file2.starred.includes(current));
       const neighbour = group[group.indexOf(current) + step];
       if (!neighbour) return false;
-      const a = file.shelves.indexOf(current);
-      const b = file.shelves.indexOf(neighbour);
-      [file.shelves[a], file.shelves[b]] = [file.shelves[b], file.shelves[a]];
+      const a = file2.shelves.indexOf(current);
+      const b = file2.shelves.indexOf(neighbour);
+      [file2.shelves[a], file2.shelves[b]] = [file2.shelves[b], file2.shelves[a]];
       return true;
     });
   }
 };
-var findIn = (shelves, name) => shelves.find((n) => n.toLowerCase() === name.trim().toLowerCase());
 function requireIn(shelves, name) {
-  const found = findIn(shelves, name);
-  if (!found) throw new Error(`no shelf named "${name}"`);
+  const found = findShelf(shelves, name);
+  if (!found) throw new UserError(`no shelf named "${name}"`);
   return found;
 }
-function withOrphans(shelves, prompts) {
-  const all = [...shelves];
-  for (const p of prompts) if (p.shelf && !findIn(all, p.shelf)) all.push(p.shelf);
-  return all;
-}
-function validName(name) {
-  const clean = name.trim().replace(/\s+/g, " ");
-  if (!clean) throw new Error("a shelf needs a name");
-  if ([...clean].length > MAX_NAME) throw new Error(`shelf names can be at most ${MAX_NAME} characters`);
-  if (RESERVED.includes(clean.toLowerCase())) throw new Error(`"${clean}" is reserved; pick another name`);
-  return clean;
-}
 
-// src/domain/time.ts
-function ago(iso, now = /* @__PURE__ */ new Date()) {
-  if (!iso) return "";
-  const then = new Date(iso);
-  const seconds = Math.max(0, (now.getTime() - then.getTime()) / 1e3);
-  if (Number.isNaN(seconds)) return "";
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  if (seconds < 7 * 86400) return `${Math.floor(seconds / 86400)}d ago`;
-  return then.toLocaleDateString(void 0, { day: "numeric", month: "short", ...then.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {} });
-}
-function localTime(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(void 0, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-// src/session/run.ts
-import { spawn as spawn2 } from "child_process";
-import { writeFile as writeFile2 } from "fs/promises";
+// src/system/passthrough.ts
+import { spawn } from "child_process";
 import { constants as osConstants } from "os";
-import { join as join3 } from "path";
-
-// src/session/actions.ts
-async function panelData(ctx) {
-  const prompts = await ctx.store.list();
-  return { prompts, shelves: withOrphans(await ctx.shelves.list(), prompts), starred: await ctx.shelves.starred() };
+function passthrough(command, args, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: "inherit", env, shell: isCmdScript(command) });
+    const ignoreSigint = () => {
+    };
+    process.on("SIGINT", ignoreSigint);
+    child.on("error", (err) => {
+      process.off("SIGINT", ignoreSigint);
+      reject(err);
+    });
+    child.on("exit", (code, signal) => {
+      process.off("SIGINT", ignoreSigint);
+      resolve(code ?? (signal ? 128 + (osConstants.signals[signal] ?? 0) : 0));
+    });
+  });
 }
-var gone = { refresh: true, status: { text: "that prompt was changed in another session", error: true } };
-var draftsLeft = async (ctx) => (await ctx.store.list()).filter(isStashDraft).length;
-async function overlayEffect(ctx, action, hasDraft) {
-  switch (action.type) {
-    case "close":
-      return { close: true };
-    case "pop": {
-      if (!await ctx.store.remove(action.prompt.id)) return gone;
-      const left = await draftsLeft(ctx);
-      return { close: true, insert: action.prompt.text, status: { text: `${hasDraft ? "appended" : "popped"} \xB7 ${left} left` } };
+
+// src/terminal/ansi.ts
+var ansi = {
+  hideCursor: "\x1B[?25l",
+  showCursor: "\x1B[?25h",
+  clearScreen: "\x1B[2J",
+  home: "\x1B[H",
+  moveTo: (row, col) => `\x1B[${row + 1};${col + 1}H`,
+  reverse: "\x1B[7m",
+  dim: "\x1B[2m",
+  bold: "\x1B[1m",
+  reset: "\x1B[0m",
+  clearLine: "\x1B[2K",
+  saneEpilogue: "\x1B[?2004l\x1B[<u\x1B[?1000l\x1B[?1002l\x1B[?1006l\x1B[?25h\x1B[0m"
+};
+var noColor = Boolean(process.env.NO_COLOR);
+var trueColor = !noColor && /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? "");
+var colour = (rgb, ansi16) => noColor ? "" : trueColor ? `\x1B[38;2;${rgb.join(";")}m` : `\x1B[${ansi16}m`;
+var theme = {
+  /** Where you are: the selection marker, keys in the hints. (Current items use reverse video, readable in every theme.) */
+  accent: colour([79, 163, 255], 36),
+  success: colour([126, 196, 110], 32),
+  error: colour([232, 104, 104], 31),
+  star: colour([232, 180, 70], 33)
+};
+
+// src/terminal/pty.ts
+import { accessSync, chmodSync, constants, existsSync, readdirSync } from "fs";
+import { createRequire } from "module";
+import { dirname as dirname3, join as join3 } from "path";
+import * as nodePty from "node-pty";
+var helperChecked = false;
+function ensureSpawnHelperExecutable() {
+  if (helperChecked || process.platform === "win32") return;
+  helperChecked = true;
+  try {
+    const prebuilds = join3(dirname3(createRequire(import.meta.url).resolve("node-pty/package.json")), "prebuilds");
+    if (!existsSync(prebuilds)) return;
+    for (const entry of readdirSync(prebuilds)) {
+      const helper = join3(prebuilds, entry, "spawn-helper");
+      if (!existsSync(helper)) continue;
+      try {
+        accessSync(helper, constants.X_OK);
+      } catch {
+        chmodSync(helper, 493);
+      }
     }
-    case "use": {
-      if (!await ctx.store.markUsed(action.prompt.id)) return gone;
-      const kept = action.prompt.shelf ? `kept on ${action.prompt.shelf}` : "kept in stash";
-      return { close: true, insert: action.prompt.text, status: { text: `${hasDraft ? "appended" : "used"} \xB7 ${kept}` } };
-    }
-    case "use-skill":
-      return { close: true, insert: ctx.skillPrompt(action.name, hasDraft), status: { text: `skill: ${action.name}` } };
-    case "delete":
-      return await ctx.store.remove(action.prompt.id) ? { refresh: true, status: { text: "deleted" } } : gone;
-    case "save-to-shelf": {
-      const shelf = await ctx.shelves.create(action.shelf);
-      if (!await ctx.store.setShelf(action.prompt.id, shelf)) return gone;
-      return { refresh: true, status: { text: `saved to ${shelf}` } };
-    }
-    case "create-shelf": {
-      const shelf = await ctx.shelves.create(action.name);
-      if (!action.prompt) return { refresh: true, showShelf: shelf, status: { text: `shelf ${shelf} is ready` } };
-      if (!await ctx.store.setShelf(action.prompt.id, shelf)) return gone;
-      return { refresh: true, status: { text: `saved to ${shelf}` } };
-    }
-    case "star-shelf": {
-      const shelf = await ctx.shelves.create(action.shelf);
-      const starred = await ctx.shelves.toggleStar(shelf);
-      return { refresh: true, status: { text: `${starred ? "starred" : "unstarred"} ${shelf}` } };
-    }
-    case "move-shelf": {
-      const moved = await ctx.shelves.move(await ctx.shelves.create(action.shelf), action.step);
-      return moved ? { refresh: true } : { status: { text: action.step < 0 ? "already first" : "already last" } };
-    }
-    case "none":
-      return {};
+  } catch {
   }
 }
-async function pickerEffect(ctx, action, text) {
-  if (action.type === "none") return {};
-  if (action.type === "cancel") return { close: true };
-  const shelf = action.type === "create-shelf" ? await ctx.shelves.create(action.name) : action.shelf && await ctx.shelves.create(action.shelf);
-  await ctx.store.add({ text, agent: ctx.agent, cwd: ctx.cwd, ...shelf ? { shelf } : {} });
-  return { close: true, clearDraft: true, status: { text: shelf ? `saved to ${shelf}` : `stashed (${await draftsLeft(ctx)})` } };
+function spawnAgent(opts) {
+  ensureSpawnHelperExecutable();
+  const child = nodePty.spawn(opts.command, opts.args, {
+    name: process.env.TERM ?? "xterm-256color",
+    cols: opts.cols,
+    rows: opts.rows,
+    cwd: opts.cwd,
+    env: opts.env
+  });
+  return {
+    write: (data) => child.write(data),
+    resize: (cols, rows) => child.resize(cols, rows),
+    onData: (cb) => void child.onData(cb),
+    onExit: (cb) => void child.onExit(({ exitCode, signal }) => cb(signal ? 128 + signal : exitCode))
+  };
 }
 
 // src/terminal/screen.ts
@@ -634,46 +575,413 @@ var Screen = class {
   }
 };
 
-// src/terminal/pty.ts
-import { accessSync, chmodSync, constants, existsSync, readdirSync } from "fs";
-import { createRequire } from "module";
-import { dirname as dirname2, join as join2 } from "path";
-import * as nodePty from "node-pty";
-var helperChecked = false;
-function ensureSpawnHelperExecutable() {
-  if (helperChecked || process.platform === "win32") return;
-  helperChecked = true;
-  try {
-    const prebuilds = join2(dirname2(createRequire(import.meta.url).resolve("node-pty/package.json")), "prebuilds");
-    if (!existsSync(prebuilds)) return;
-    for (const entry of readdirSync(prebuilds)) {
-      const helper = join2(prebuilds, entry, "spawn-helper");
-      if (!existsSync(helper)) continue;
-      try {
-        accessSync(helper, constants.X_OK);
-      } catch {
-        chmodSync(helper, 493);
-      }
-    }
-  } catch {
+// src/ui/layout.ts
+var PANEL_MAX_ROWS = 11;
+var FALLBACK_BOTTOM_GAP = 4;
+var TOAST_BOTTOM_GAP = 3;
+var anchorRow = ({ inputTop, hasBorderAbove }) => inputTop === null ? null : inputTop - (hasBorderAbove ? 1 : 0);
+function panelPlacement(input, height = PANEL_MAX_ROWS) {
+  const rows = Math.max(1, input.rows);
+  const h = Math.min(height, rows);
+  const anchor = anchorRow(input);
+  const anchored = anchor === null ? -1 : anchor - h;
+  const preferred = anchored < 0 ? rows - h - FALLBACK_BOTTOM_GAP : anchored;
+  const top = Math.max(0, Math.min(preferred, rows - h));
+  return { top, height: h };
+}
+function toastRow(input) {
+  const anchor = anchorRow(input);
+  const above = anchor === null ? -1 : anchor - 1;
+  return above < 0 ? Math.max(0, input.rows - TOAST_BOTTOM_GAP) : above;
+}
+
+// src/session/display.ts
+var TOAST_MS = 3e3;
+var TOAST_REDRAW_MS = 80;
+var Display = class {
+  constructor(out, screen, adapter) {
+    this.out = out;
+    this.screen = screen;
+    this.adapter = adapter;
   }
+  out;
+  screen;
+  adapter;
+  shown = null;
+  placement = null;
+  toastBar = null;
+  toastTimer = null;
+  toastRedraw = null;
+  get cols() {
+    return this.out.columns || 80;
+  }
+  get rows() {
+    return this.out.rows || 24;
+  }
+  get panelShown() {
+    return this.shown !== null;
+  }
+  /** The agent's output: passed straight through unless a panel covers the screen. */
+  agentOutput(data) {
+    if (this.shown) return;
+    this.out.write(data);
+    if (this.toastBar) {
+      if (this.toastRedraw) clearTimeout(this.toastRedraw);
+      this.toastRedraw = setTimeout(() => this.drawToast(), TOAST_REDRAW_MS);
+    }
+  }
+  /** Shows `panel` above the input box; `height` defaults to the full panel height. */
+  show(panel, height) {
+    this.shown = { panel, height };
+    this.redraw();
+  }
+  hide() {
+    this.shown = null;
+    this.placement = null;
+    this.repaintAgent();
+  }
+  /** Draws the shown panel again, with `status` in place of its key hints. */
+  redraw(status) {
+    if (!this.shown) return;
+    this.clearToast();
+    const next = panelPlacement(this.inputAnchor(), this.shown.height);
+    if (this.placement && (this.placement.top !== next.top || this.placement.height !== next.height)) this.repaintAgent();
+    this.placement = next;
+    const frame = this.shown.panel.render(this.cols, next.height, status).split("\r\n");
+    this.out.write(ansi.hideCursor + frame.map((line, i) => ansi.moveTo(next.top + i, 0) + line).join(""));
+  }
+  /** A short message: in the panel's footer when one is shown, otherwise in a bar above the input box. */
+  toast(status) {
+    this.clearToast();
+    if (this.shown) {
+      this.redraw(status);
+      this.toastTimer = setTimeout(() => this.redraw(), TOAST_MS);
+      return;
+    }
+    this.toastBar = ansi.reverse + (status.error ? theme.error : "") + fitLine(` ${status.text} `, this.cols) + ansi.reset;
+    this.drawToast();
+    this.toastTimer = setTimeout(() => {
+      this.toastBar = null;
+      this.repaintAgent();
+    }, TOAST_MS);
+  }
+  dispose() {
+    this.clearToast();
+    if (this.shown) this.hide();
+  }
+  repaintAgent() {
+    this.out.write(ansi.clearScreen + ansi.home + this.screen.serialize() + ansi.showCursor);
+  }
+  drawToast() {
+    if (!this.toastBar || this.shown) return;
+    this.out.write("\x1B7" + ansi.moveTo(toastRow(this.inputAnchor()), 0) + this.toastBar + "\x1B8");
+  }
+  clearToast() {
+    for (const timer of [this.toastTimer, this.toastRedraw]) if (timer) clearTimeout(timer);
+    this.toastTimer = null;
+    this.toastRedraw = null;
+    this.toastBar = null;
+  }
+  inputAnchor() {
+    const lines = this.screen.lines();
+    const inputTop = this.adapter.inputTop(lines);
+    const hasBorderAbove = inputTop !== null && inputTop > 0 && this.adapter.isBorder(lines[inputTop - 1] ?? "");
+    return { rows: this.rows, inputTop, hasBorderAbove };
+  }
+};
+
+// src/terminal/keys.ts
+var PASTE_START2 = Buffer.from(PASTE_START);
+var PASTE_END2 = Buffer.from(PASTE_END);
+var FUNCTION_KEYS = {
+  f1: ["\x1BOP", "\x1B[11~"],
+  f2: ["\x1BOQ", "\x1B[12~"],
+  f3: ["\x1BOR", "\x1B[13~"],
+  f4: ["\x1BOS", "\x1B[14~"],
+  f5: ["\x1B[15~"],
+  f6: ["\x1B[17~"],
+  f7: ["\x1B[18~"],
+  f8: ["\x1B[19~"],
+  f9: ["\x1B[20~"],
+  f10: ["\x1B[21~"],
+  f11: ["\x1B[23~"],
+  f12: ["\x1B[24~"]
+};
+function parseHotkey(spec) {
+  const label = spec.trim().toLowerCase();
+  const ctrl = /^ctrl\+([a-z])$/.exec(label);
+  if (ctrl) {
+    const letter = ctrl[1];
+    return {
+      label,
+      sequences: [Buffer.from([letter.toUpperCase().charCodeAt(0) - 64]), Buffer.from(`\x1B[${letter.charCodeAt(0)};5u`)]
+    };
+  }
+  const fkey = FUNCTION_KEYS[label];
+  if (fkey) return { label, sequences: fkey.map((s) => Buffer.from(s, "latin1")) };
+  throw new UserError(`Unsupported hotkey "${spec}". Use ctrl+<letter> or f1..f12.`);
 }
-function spawnAgent(opts) {
-  ensureSpawnHelperExecutable();
-  const child = nodePty.spawn(opts.command, opts.args, {
-    name: process.env.TERM ?? "xterm-256color",
-    cols: opts.cols,
-    rows: opts.rows,
-    cwd: opts.cwd,
-    env: opts.env
-  });
-  return {
-    write: (data) => child.write(data),
-    resize: (cols, rows) => child.resize(cols, rows),
-    onData: (cb) => void child.onData(cb),
-    onExit: (cb) => void child.onExit(({ exitCode, signal }) => cb(signal ? 128 + signal : exitCode))
-  };
+var KeyInterceptor = class {
+  inPaste = false;
+  pending = Buffer.alloc(0);
+  escaped;
+  owner = /* @__PURE__ */ new Map();
+  singles = /* @__PURE__ */ new Map();
+  constructor(hotkeys) {
+    const list = Array.isArray(hotkeys) ? hotkeys : [hotkeys];
+    list.forEach((hotkey, index) => {
+      for (const seq of hotkey.sequences) {
+        if (seq.length === 1) this.singles.set(seq[0], index);
+        else this.owner.set(seq, index);
+      }
+    });
+    this.escaped = [...this.owner.keys()].filter((s) => s[0] === 27);
+  }
+  get hasPending() {
+    return this.pending.length > 0;
+  }
+  flush() {
+    const out = this.pending;
+    this.pending = Buffer.alloc(0);
+    return out;
+  }
+  feed(chunk) {
+    const data = Buffer.concat([this.pending, chunk]);
+    this.pending = Buffer.alloc(0);
+    const out = [];
+    const presses = [];
+    let i = 0;
+    while (i < data.length) {
+      if (data[i] === 27) {
+        const marker = this.matchPrefix(data, i, [PASTE_START2, PASTE_END2, ...this.escaped]);
+        if (marker === "partial") {
+          this.pending = data.subarray(i);
+          break;
+        }
+        if (marker === PASTE_START2 || marker === PASTE_END2) {
+          this.inPaste = marker === PASTE_START2;
+          for (let j = 0; j < marker.length; j++) out.push(data[i + j]);
+          i += marker.length;
+          continue;
+        }
+        if (marker && !this.inPaste) {
+          presses.push(this.owner.get(marker));
+          i += marker.length;
+          continue;
+        }
+      }
+      const single = this.inPaste ? void 0 : this.singles.get(data[i]);
+      if (single !== void 0) {
+        presses.push(single);
+        i++;
+        continue;
+      }
+      out.push(data[i]);
+      i++;
+    }
+    return { passthrough: Buffer.from(out), presses };
+  }
+  matchPrefix(data, at, candidates) {
+    for (const marker of candidates) {
+      const avail = data.subarray(at, at + marker.length);
+      if (avail.equals(marker)) return marker;
+      if (avail.length < marker.length && marker.subarray(0, avail.length).equals(avail)) return "partial";
+    }
+    return null;
+  }
+};
+var CSI_U = /^\x1b\[(\d+)(?:;(\d+))?u$/;
+function normalizeKey(key) {
+  const m = CSI_U.exec(key);
+  if (!m) return key;
+  const code = Number(m[1]);
+  const mods = Number(m[2] ?? "1");
+  if (mods !== 1) return key;
+  if (code === 27) return "\x1B";
+  if (code === 13) return "\r";
+  if (code === 127) return "\x7F";
+  return String.fromCodePoint(code);
 }
+var ESCAPE_SEQUENCE = /^\x1b(?:\[[0-9;?]*[@-~]|O.)/;
+function splitKeys(chunk) {
+  const keys = [];
+  for (let i = 0; i < chunk.length; ) {
+    const seq = chunk[i] === "\x1B" ? ESCAPE_SEQUENCE.exec(chunk.slice(i)) : null;
+    const key = seq ? seq[0] : String.fromCodePoint(chunk.codePointAt(i));
+    keys.push(normalizeKey(key));
+    i += key.length;
+  }
+  return keys;
+}
+
+// src/session/hotkeys.ts
+function sessionKeys(config, adapter) {
+  for (const [spec, fix] of [
+    [config.hotkey, "stash hotkey <key>"],
+    [config.listHotkey, "stash hotkey list <key>"]
+  ]) {
+    if (adapter.reservedKeys.includes(spec.toLowerCase())) throw new UserError(`hotkey ${spec} is reserved by ${adapter.name}; pick another with \`${fix}\``, 2);
+  }
+  const save = parseHotkey(config.hotkey);
+  const list = parseHotkey(config.listHotkey);
+  if (save.label === list.label) throw new UserError(`the stash and list hotkeys are both ${save.label}; change one with \`stash hotkey list <key>\``, 2);
+  return { save, list };
+}
+
+// src/session/record.ts
+import { writeFile as writeFile2 } from "fs/promises";
+import { join as join4 } from "path";
+async function recordScreen(screen, dir, agent) {
+  await screen.write("");
+  const base = join4(dir, `record-${agent}-${Date.now()}`);
+  await writeFile2(`${base}.txt`, screen.lines().join("\n") + `
+--- cursor ${JSON.stringify(screen.cursor())}
+`);
+  await writeFile2(`${base}.ans`, screen.serialize());
+  return `${base}.txt`;
+}
+
+// src/terminal/inject.ts
+var yieldTick = () => new Promise((r) => setTimeout(r, 0));
+async function injectPaste(target, text, chunkSize = 512) {
+  const body = text.replace(/\r?\n/g, "\r");
+  target.write(PASTE_START);
+  for (let i = 0; i < body.length; i += chunkSize) {
+    target.write(body.slice(i, i + chunkSize));
+    await yieldTick();
+  }
+  target.write(PASTE_END);
+}
+
+// src/terminal/pastes.ts
+var PasteRecorder = class {
+  buffer = null;
+  feed(text) {
+    const done = [];
+    let rest = text;
+    while (rest) {
+      if (this.buffer === null) {
+        const start = rest.indexOf(PASTE_START);
+        if (start < 0) break;
+        this.buffer = "";
+        rest = rest.slice(start + PASTE_START.length);
+        continue;
+      }
+      const end = rest.indexOf(PASTE_END);
+      if (end < 0) {
+        this.buffer += rest;
+        break;
+      }
+      done.push((this.buffer + rest.slice(0, end)).replace(/\r\n?/g, "\n"));
+      this.buffer = null;
+      rest = rest.slice(end + PASTE_END.length);
+    }
+    return done;
+  }
+};
+var RECENT_PASTES = 50;
+var charCount = (text) => [...text].length;
+var lineBreaks = (text) => text.split("\n").length - 1;
+var PasteLabels = class _PasteLabels {
+  constructor(label) {
+    this.label = label;
+  }
+  label;
+  byNumber = /* @__PURE__ */ new Map();
+  highest = 0;
+  recent = [];
+  remember(pasted) {
+    this.recent.push(pasted);
+    if (this.recent.length > RECENT_PASTES) this.recent.shift();
+  }
+  // Whether `text` can be the paste behind a placeholder that says it hides `extraLines` lines.
+  static fits(text, extraLines) {
+    return lineBreaks(text) === (extraLines === void 0 ? 0 : Number(extraLines));
+  }
+  /**
+   * Maps placeholder numbers on screen to the pastes that produced them. A short paste gets no
+   * placeholder, so k numbers above the highest seen belong to the last k pastes, in order. If
+   * the agent starts numbering again (a new session, /clear), a number already mapped to a paste
+   * that doesn't fit its placeholder goes to the newest paste that does. Returns whether it
+   * mapped anything.
+   */
+  learn(screenText, pastes) {
+    if (this.label.key !== "number" || !pastes.length) return false;
+    const labels = /* @__PURE__ */ new Map();
+    for (const m of screenText.matchAll(this.label.pattern)) labels.set(Number(m[1]), m[2]);
+    const fresh = [...labels.keys()].filter((n) => n > this.highest).sort((a, b) => a - b);
+    let mapped = false;
+    if (fresh.length) {
+      const owners = pastes.slice(-fresh.length);
+      fresh.slice(-owners.length).forEach((n, i) => this.byNumber.set(n, owners[i]));
+      this.highest = fresh[fresh.length - 1];
+      mapped = true;
+    }
+    for (const [n, extra] of labels) {
+      const known = this.byNumber.get(n);
+      if (known !== void 0 && _PasteLabels.fits(known, extra)) continue;
+      const owner = [...pastes].reverse().find((p) => _PasteLabels.fits(p, extra));
+      if (owner === void 0) continue;
+      this.byNumber.set(n, owner);
+      mapped = true;
+    }
+    return mapped;
+  }
+  /**
+   * The text with every placeholder replaced, or null when one of them can't be matched to a paste
+   * that fits it; never a wrong paste's text.
+   */
+  expand(text) {
+    const bySize = this.label.key === "chars" ? this.sizeQueues(text) : null;
+    let unknown = false;
+    const out = text.replace(this.label.pattern, (whole, n, extra) => {
+      const pasted = bySize ? bySize.get(Number(n))?.shift() : this.byNumber.get(Number(n));
+      if (pasted === void 0 || !bySize && !_PasteLabels.fits(pasted, extra)) unknown = true;
+      return pasted ?? whole;
+    });
+    return unknown ? null : out;
+  }
+  // For k placeholders of one size, the last k pastes of that size, oldest first: the box
+  // lists pastes in the order they were made.
+  sizeQueues(text) {
+    const wanted = /* @__PURE__ */ new Map();
+    for (const match of text.matchAll(this.label.pattern)) wanted.set(Number(match[1]), (wanted.get(Number(match[1])) ?? 0) + 1);
+    const queues = /* @__PURE__ */ new Map();
+    for (const [size, count] of wanted) queues.set(size, this.recent.filter((p) => charCount(p) === size).slice(-count));
+    return queues;
+  }
+};
+var PENDING_MS = 5e3;
+var PasteTracker = class {
+  constructor(labels, screenText, now = Date.now) {
+    this.labels = labels;
+    this.screenText = screenText;
+    this.now = now;
+  }
+  labels;
+  screenText;
+  now;
+  pending = [];
+  get waiting() {
+    return this.pending.length > 0;
+  }
+  pasted(text) {
+    this.labels.remember(text);
+    this.pending.push({ text, at: this.now() });
+  }
+  check() {
+    this.match();
+    const now = this.now();
+    this.pending = this.pending.filter((p) => now - p.at < PENDING_MS);
+  }
+  expand(draft) {
+    this.match();
+    return this.labels.expand(draft);
+  }
+  match() {
+    if (this.pending.length && this.labels.learn(this.screenText(), this.pending.map((p) => p.text))) this.pending = [];
+  }
+};
 
 // src/terminal/stdin.ts
 import { StringDecoder } from "string_decoder";
@@ -701,74 +1009,25 @@ var StdinPipeline = class {
 // src/ui/list-panel.ts
 import { basename } from "path";
 
-// src/terminal/ansi.ts
-var ansi = {
-  hideCursor: "\x1B[?25l",
-  showCursor: "\x1B[?25h",
-  clearScreen: "\x1B[2J",
-  home: "\x1B[H",
-  moveTo: (row, col) => `\x1B[${row + 1};${col + 1}H`,
-  reverse: "\x1B[7m",
-  dim: "\x1B[2m",
-  bold: "\x1B[1m",
-  reset: "\x1B[0m",
-  clearLine: "\x1B[2K",
-  saneEpilogue: "\x1B[?2004l\x1B[<u\x1B[?1000l\x1B[?1002l\x1B[?1006l\x1B[?25h\x1B[0m"
-};
-var noColor = Boolean(process.env.NO_COLOR);
-var trueColor = !noColor && /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? "");
-var colour = (rgb, ansi16) => noColor ? "" : trueColor ? `\x1B[38;2;${rgb.join(";")}m` : `\x1B[${ansi16}m`;
-var theme = {
-  /** Where you are: the selection marker, keys in the hints. (Current items use reverse video, readable in every theme.) */
-  accent: colour([79, 163, 255], 36),
-  success: colour([126, 196, 110], 32),
-  error: colour([232, 104, 104], 31),
-  star: colour([232, 180, 70], 33)
-};
+// src/domain/time.ts
+function ago(iso, now = /* @__PURE__ */ new Date()) {
+  if (!iso) return "";
+  const then = new Date(iso);
+  const seconds = Math.max(0, (now.getTime() - then.getTime()) / 1e3);
+  if (Number.isNaN(seconds)) return "";
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  if (seconds < 7 * 86400) return `${Math.floor(seconds / 86400)}d ago`;
+  return then.toLocaleDateString(void 0, { day: "numeric", month: "short", ...then.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {} });
+}
+function localTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(void 0, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
 
 // src/ui/widgets.ts
-var ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
-var ANSI_AT_START = /^\x1b\[[0-9;?]*[A-Za-z]/;
-var ZERO_WIDTH = /^[\p{Mn}\p{Me}​-‏⁠︎️]$/u;
-var WIDE = /^[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]$/u;
-var cellWidth = (ch) => ZERO_WIDTH.test(ch) ? 0 : WIDE.test(ch) || new RegExp("\\p{Extended_Pictographic}", "u").test(ch) ? 2 : 1;
-var stripAnsi = (text) => text.replace(ANSI, "");
-var visibleWidth = (text) => [...stripAnsi(text)].reduce((n, ch) => n + cellWidth(ch), 0);
-var flatten = (text) => text.replace(/\r?\n/g, " \u23CE ").replace(/\t/g, " ").replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
-function clip(text, width) {
-  if (visibleWidth(text) <= width) return text;
-  let out = "";
-  let used = 0;
-  for (const ch of text) {
-    const w = cellWidth(ch);
-    if (used + w > width - 1) break;
-    out += ch;
-    used += w;
-  }
-  return width > 0 ? out + "\u2026" : "";
-}
-function truncateLine(line, width) {
-  let out = "";
-  let used = 0;
-  for (let i = 0; i < line.length; ) {
-    const seq = ANSI_AT_START.exec(line.slice(i));
-    if (seq) {
-      out += seq[0];
-      i += seq[0].length;
-      continue;
-    }
-    const ch = String.fromCodePoint(line.codePointAt(i));
-    const w = cellWidth(ch);
-    if (used + w <= width) {
-      out += ch;
-      used += w;
-    }
-    i += ch.length;
-  }
-  return out;
-}
-var fitLine = (line, width) => truncateLine(line, width) + " ".repeat(Math.max(0, width - visibleWidth(line)));
-var padCells = (text, width) => text + " ".repeat(Math.max(0, width - visibleWidth(text)));
 var keyHints = (pairs) => " " + pairs.map(([k, what]) => `${ansi.bold}${theme.accent}${k}${ansi.reset} ${ansi.dim}${what}${ansi.reset}`).join("   ");
 function choiceRow(labels, active, width, style = (l) => l) {
   const cells = labels.map((l) => visibleWidth(l) + 2);
@@ -792,21 +1051,24 @@ var TextInput = class {
     return ` ${ansi.bold}${label} ${this.value}\u258F${ansi.reset}${ansi.dim}   ${hint}${ansi.reset}`;
   }
 };
+var statusLine = (status) => ` ${ansi.bold}${status.error ? theme.error : theme.success}${status.text}${ansi.reset}`;
+var addNewHint = () => `  ${ansi.dim}+ new (${ansi.reset}${ansi.bold}${theme.accent}n${ansi.reset}${ansi.dim})${ansi.reset}`;
+function panelFrame(lines, footer, cols, rows) {
+  const body = lines.slice(0, Math.max(0, rows - 1));
+  while (body.length < rows - 1) body.push("");
+  if (rows > 0) body.push(footer);
+  return body.map((l) => ansi.clearLine + truncateLine(l, cols)).join("\r\n");
+}
+var shelfLabel = (name, starred) => starred.includes(name) ? `\u2605 ${name}` : name;
+var styleStar = (label) => label.replace(/^★/, `${theme.star}\u2605${ansi.reset}`);
 
 // src/ui/list-panel.ts
-var SORT_ORDERS = ["newest", "most-used", "recent"];
 var SORT_LABEL = { newest: "newest first", "most-used": "most used", recent: "recently used" };
-var nextSort = (order) => SORT_ORDERS[(SORT_ORDERS.indexOf(order) + 1) % SORT_ORDERS.length];
-function sortSaved(prompts, order) {
-  if (order === "most-used") return [...prompts].sort((a, b) => (b.usedCount ?? 0) - (a.usedCount ?? 0));
-  if (order === "recent") return [...prompts].sort((a, b) => (b.lastUsedAt ?? "").localeCompare(a.lastUsedAt ?? ""));
-  return prompts;
-}
 var sameTab = (a, b) => a.kind === b.kind && (a.kind !== "shelf" || b.kind === "shelf" && a.name === b.name);
 var rowText = (row) => row.kind === "skill" ? `${row.skill.name} ${row.skill.description}` : row.prompt.text;
 var usageTag = (p) => p.usedCount ? `used ${p.usedCount}\xD7 \xB7 ${ago(p.lastUsedAt)}` : `saved ${ago(p.createdAt)}`;
 var KEY_COLUMN = 11;
-var Overlay = class {
+var ListPanel = class {
   index = 0;
   mode = "list";
   filterText = "";
@@ -831,7 +1093,7 @@ var Overlay = class {
     this.starredShelves = options.starredShelves ?? [];
     this.skills = options.skills ?? [];
     this.agent = options.agent ?? "the agent";
-    this.hotkeyLabel = options.hotkeyLabel ?? "ctrl+f";
+    this.hotkeyLabel = options.hotkeyLabel;
     this.currentScope = options.scope ?? "repo";
     this.sortOrder = options.sort ?? "newest";
     const start = options.tab ? this.tabs().findIndex((t) => sameTab(t, options.tab)) : 0;
@@ -979,11 +1241,8 @@ var Overlay = class {
       const top = Math.max(0, Math.min(this.index - Math.floor(bodyRows / 2), list.length - bodyRows));
       list.slice(top, top + bodyRows).forEach((row, i) => body.push(this.rowLine(row, top + i === this.index, cols)));
     }
-    const footer = status ? ` ${ansi.bold}${status.error ? theme.error : theme.success}${status.text}${ansi.reset}` : this.footer(cols);
-    const lines = [this.tabBar(cols), this.infoLine(cols, list.length), ...body.slice(0, bodyRows)].slice(0, Math.max(0, rows - 1));
-    while (lines.length < rows - 1) lines.push("");
-    if (rows > 0) lines.push(footer);
-    return lines.map((l) => ansi.clearLine + truncateLine(l, cols)).join("\r\n");
+    const footer = status ? statusLine(status) : this.footer(cols);
+    return panelFrame([this.tabBar(cols), this.infoLine(cols, list.length), ...body.slice(0, bodyRows)], footer, cols, rows);
   }
   rowLine(row, selected, cols) {
     const marker = selected ? `${theme.accent}\u25B8${ansi.reset}` : " ";
@@ -1066,14 +1325,14 @@ var Overlay = class {
   tabName(tab) {
     if (tab.kind === "stash") return "Stash";
     if (tab.kind === "skills") return "Skills";
-    return this.starredShelves.includes(tab.name) ? `\u2605 ${tab.name}` : tab.name;
+    return shelfLabel(tab.name, this.starredShelves);
   }
   // The lists as tabs, then "+ new (n)", with "←→ switch list" on the right when there's room.
   tabBar(cols) {
-    const addNew = `  ${ansi.dim}+ new (${ansi.reset}${ansi.bold}${theme.accent}n${ansi.reset}${ansi.dim})${ansi.reset}`;
+    const addNew = addNewHint();
     const hint = "\u2190\u2192 switch list";
     const labels = this.tabs().map((t) => `${this.tabName(t)} ${this.tabRows(t).length}`);
-    const style = (l) => l.replace(/^★/, `${theme.star}\u2605${ansi.reset}`).replace(/ (\d+)$/, ` ${ansi.dim}$1${ansi.reset}`);
+    const style = (l) => styleStar(l).replace(/ (\d+)$/, ` ${ansi.dim}$1${ansi.reset}`);
     const row = choiceRow(labels, this.tabIndex, cols - visibleWidth(addNew) - hint.length - 2, style) + addNew;
     const gap = cols - visibleWidth(row) - hint.length - 1;
     return gap > 0 ? `${row}${" ".repeat(gap)}${ansi.dim}${hint}${ansi.reset}` : row;
@@ -1209,470 +1468,297 @@ var SavePicker = class {
   }
   render(cols, rows, status) {
     const label = " Save to:";
-    const addNew = `  ${ansi.dim}+ new (${ansi.reset}${ansi.bold}${theme.accent}n${ansi.reset}${ansi.dim})${ansi.reset}`;
-    const names = ["Stash", ...this.shelves.map((s) => this.starred.includes(s) ? `\u2605 ${s}` : s)];
-    const places = choiceRow(names, this.index, cols - label.length - visibleWidth(addNew) - 1, (l) => l.replace(/^★/, `${theme.star}\u2605${ansi.reset}`));
+    const addNew = addNewHint();
+    const names = ["Stash", ...this.shelves.map((s) => shelfLabel(s, this.starred))];
+    const places = choiceRow(names, this.index, cols - label.length - visibleWidth(addNew) - 1, styleStar);
     let footer;
-    if (status) footer = ` ${ansi.bold}${status.error ? theme.error : theme.success}${status.text}${ansi.reset}`;
+    if (status) footer = statusLine(status);
     else if (this.naming) footer = this.naming.render("new shelf name:", "enter create \xB7 esc back");
     else footer = keyHints([["\u2190\u2192", "choose"], ["enter", "save"], ["n", "new shelf"], ["esc", "cancel"]]);
-    const lines = [`${ansi.bold}${label}${ansi.reset}${places}${addNew}`, ` ${ansi.dim}${flatten(this.draft)}${ansi.reset}`].slice(0, Math.max(0, rows - 1));
-    while (lines.length < rows - 1) lines.push("");
-    if (rows > 0) lines.push(footer);
-    return lines.map((l) => ansi.clearLine + fitLine(l, cols)).join("\r\n");
+    return panelFrame([`${ansi.bold}${label}${ansi.reset}${places}${addNew}`, ` ${ansi.dim}${flatten(this.draft)}${ansi.reset}`], footer, cols, rows);
   }
 };
 
-// src/ui/layout.ts
-var PANEL_MAX_ROWS = 11;
-var FALLBACK_BOTTOM_GAP = 4;
-var TOAST_BOTTOM_GAP = 3;
-var anchorRow = ({ inputTop, hasBorderAbove }) => inputTop === null ? null : inputTop - (hasBorderAbove ? 1 : 0);
-function panelPlacement(input, height = PANEL_MAX_ROWS) {
-  const rows = Math.max(1, input.rows);
-  const h = Math.min(height, rows);
-  const anchor = anchorRow(input);
-  const anchored = anchor === null ? -1 : anchor - h;
-  const preferred = anchored < 0 ? rows - h - FALLBACK_BOTTOM_GAP : anchored;
-  const top = Math.max(0, Math.min(preferred, rows - h));
-  return { top, height: h };
+// src/session/actions.ts
+async function panelData(ctx) {
+  const prompts = await ctx.store.list();
+  return { prompts, shelves: withOrphans(await ctx.shelves.list(), prompts), starred: await ctx.shelves.starred() };
 }
-function toastRow(input) {
-  const anchor = anchorRow(input);
-  const above = anchor === null ? -1 : anchor - 1;
-  return above < 0 ? Math.max(0, input.rows - TOAST_BOTTOM_GAP) : above;
+var gone = { refresh: true, status: { text: "that prompt was changed in another session", error: true } };
+var draftsLeft = async (ctx) => (await ctx.store.list()).filter(isStashDraft).length;
+async function listEffect(ctx, action, hasDraft) {
+  switch (action.type) {
+    case "close":
+      return { close: true };
+    case "pop": {
+      if (!await ctx.store.remove(action.prompt.id)) return gone;
+      const left = await draftsLeft(ctx);
+      return { close: true, insert: action.prompt.text, status: { text: `${hasDraft ? "appended" : "popped"} \xB7 ${left} left` } };
+    }
+    case "use": {
+      if (!await ctx.store.markUsed(action.prompt.id)) return gone;
+      const kept = action.prompt.shelf ? `kept on ${action.prompt.shelf}` : "kept in stash";
+      return { close: true, insert: action.prompt.text, status: { text: `${hasDraft ? "appended" : "used"} \xB7 ${kept}` } };
+    }
+    case "use-skill":
+      return { close: true, insert: ctx.skillPrompt(action.name, hasDraft), status: { text: `skill: ${action.name}` } };
+    case "delete":
+      return await ctx.store.remove(action.prompt.id) ? { refresh: true, status: { text: "deleted" } } : gone;
+    case "save-to-shelf": {
+      const shelf = await ctx.shelves.create(action.shelf);
+      if (!await ctx.store.setShelf(action.prompt.id, shelf)) return gone;
+      return { refresh: true, status: { text: `saved to ${shelf}` } };
+    }
+    case "create-shelf": {
+      const shelf = await ctx.shelves.create(action.name);
+      if (!action.prompt) return { refresh: true, showShelf: shelf, status: { text: `shelf ${shelf} is ready` } };
+      if (!await ctx.store.setShelf(action.prompt.id, shelf)) return gone;
+      return { refresh: true, status: { text: `saved to ${shelf}` } };
+    }
+    case "star-shelf": {
+      const shelf = await ctx.shelves.create(action.shelf);
+      const starred = await ctx.shelves.toggleStar(shelf);
+      return { refresh: true, status: { text: `${starred ? "starred" : "unstarred"} ${shelf}` } };
+    }
+    case "move-shelf": {
+      const moved = await ctx.shelves.move(await ctx.shelves.create(action.shelf), action.step);
+      return moved ? { refresh: true } : { status: { text: action.step < 0 ? "already first" : "already last" } };
+    }
+    case "none":
+      return {};
+  }
+}
+async function pickerEffect(ctx, action, text) {
+  if (action.type === "none") return {};
+  if (action.type === "cancel") return { close: true };
+  const shelf = action.type === "create-shelf" ? await ctx.shelves.create(action.name) : action.shelf && await ctx.shelves.create(action.shelf);
+  await ctx.store.add({ text, agent: ctx.agent, cwd: ctx.cwd, ...shelf ? { shelf } : {} });
+  return { close: true, clearDraft: true, status: { text: shelf ? `saved to ${shelf}` : `stashed (${await draftsLeft(ctx)})` } };
 }
 
-// src/terminal/inject.ts
-var PASTE_START2 = "\x1B[200~";
-var PASTE_END2 = "\x1B[201~";
-var yieldTick = () => new Promise((r) => setTimeout(r, 0));
-async function injectPaste(target, text, chunkSize = 512) {
-  const body = text.replace(/\r?\n/g, "\r");
-  target.write(PASTE_START2);
-  for (let i = 0; i < body.length; i += chunkSize) {
-    target.write(body.slice(i, i + chunkSize));
-    await yieldTick();
+// src/session/session.ts
+var ESC_FLUSH_MS = 25;
+var PASTE_CHECK_MS = 100;
+var PICKER_ROWS = 3;
+var isKey = (chunk, key) => key.sequences.some((seq) => chunk.equals(seq));
+var Session = class {
+  constructor(deps) {
+    this.deps = deps;
+    this.input = new StdinPipeline(new KeyInterceptor([deps.keys.save, deps.keys.list]));
+    const label = deps.adapter.pasteLabel;
+    this.tracker = label ? new PasteTracker(new PasteLabels(label), () => deps.screen.lines().join("\n")) : null;
   }
-  target.write(PASTE_END2);
-}
-
-// src/terminal/pastes.ts
-var PASTE_START3 = "\x1B[200~";
-var PASTE_END3 = "\x1B[201~";
-var PasteRecorder = class {
-  buffer = null;
-  feed(text) {
-    const done = [];
-    let rest = text;
-    while (rest) {
-      if (this.buffer === null) {
-        const start = rest.indexOf(PASTE_START3);
-        if (start < 0) break;
-        this.buffer = "";
-        rest = rest.slice(start + PASTE_START3.length);
-        continue;
-      }
-      const end = rest.indexOf(PASTE_END3);
-      if (end < 0) {
-        this.buffer += rest;
-        break;
-      }
-      done.push((this.buffer + rest.slice(0, end)).replace(/\r\n?/g, "\n"));
-      this.buffer = null;
-      rest = rest.slice(end + PASTE_END3.length);
+  deps;
+  list = null;
+  // The save picker, with the draft it is saving and that draft's full text (pastes expanded).
+  picker = null;
+  // Set while a panel is being opened, so a fast double press doesn't open two.
+  opening = false;
+  // What the list remembers between openings in this session.
+  last = { scope: "repo", tab: { kind: "stash" }, sort: "newest" };
+  skills = null;
+  input;
+  pastes = new PasteRecorder();
+  tracker;
+  pasteTimer = null;
+  escTimer = null;
+  // Actions run one at a time, in order, so fast key presses never interleave their changes.
+  queue = Promise.resolve();
+  get panelOpen() {
+    return this.list !== null || this.picker !== null || this.opening;
+  }
+  /** Waits for every queued action to finish. */
+  idle() {
+    return this.queue;
+  }
+  /** Output from the agent. */
+  agentOutput(data) {
+    void this.deps.screen.write(data);
+    this.deps.display.agentOutput(data);
+    this.checkPastesSoon();
+  }
+  /** Input from the user's terminal. */
+  userInput(chunk) {
+    const { keys, pty } = this.deps;
+    if (this.picker) {
+      const { ui, text: text2 } = this.picker;
+      if (isKey(chunk, keys.save)) this.serial(async () => this.apply(await pickerEffect(this.deps.ctx, ui.confirm(), text2)));
+      else if (isKey(chunk, keys.list)) this.closePanel();
+      else this.forPanel(chunk, (k) => pickerEffect(this.deps.ctx, ui.handleKey(k), text2));
+      return;
     }
-    return done;
-  }
-};
-var RECENT_PASTES = 50;
-var charCount = (text) => [...text].length;
-var lineBreaks = (text) => text.split("\n").length - 1;
-var PasteLabels = class _PasteLabels {
-  constructor(label) {
-    this.label = label;
-  }
-  label;
-  byNumber = /* @__PURE__ */ new Map();
-  highest = 0;
-  recent = [];
-  remember(pasted) {
-    this.recent.push(pasted);
-    if (this.recent.length > RECENT_PASTES) this.recent.shift();
-  }
-  // Whether `text` can be the paste behind a placeholder that says it hides `extraLines` lines.
-  static fits(text, extraLines) {
-    return lineBreaks(text) === (extraLines === void 0 ? 0 : Number(extraLines));
-  }
-  /**
-   * Maps placeholder numbers on screen to the pastes that produced them. A short paste gets no
-   * placeholder, so k numbers above the highest seen belong to the last k pastes, in order. If
-   * the agent starts numbering again (a new session, /clear), a number already mapped to a paste
-   * that doesn't fit its placeholder goes to the newest paste that does. Returns whether it
-   * mapped anything.
-   */
-  learn(screenText, pastes) {
-    if (this.label.key !== "number" || !pastes.length) return false;
-    const labels = /* @__PURE__ */ new Map();
-    for (const m of screenText.matchAll(this.label.pattern)) labels.set(Number(m[1]), m[2]);
-    const fresh = [...labels.keys()].filter((n) => n > this.highest).sort((a, b) => a - b);
-    let mapped = false;
-    if (fresh.length) {
-      const owners = pastes.slice(-fresh.length);
-      fresh.slice(-owners.length).forEach((n, i) => this.byNumber.set(n, owners[i]));
-      this.highest = fresh[fresh.length - 1];
-      mapped = true;
+    if (this.list) {
+      const { ui, hadDraft } = this.list;
+      if (isKey(chunk, keys.save) || isKey(chunk, keys.list)) this.closePanel();
+      else this.forPanel(chunk, (k) => listEffect(this.deps.ctx, ui.handleKey(k), hadDraft));
+      return;
     }
-    for (const [n, extra] of labels) {
-      const known = this.byNumber.get(n);
-      if (known !== void 0 && _PasteLabels.fits(known, extra)) continue;
-      const owner = [...pastes].reverse().find((p) => _PasteLabels.fits(p, extra));
-      if (owner === void 0) continue;
-      this.byNumber.set(n, owner);
-      mapped = true;
-    }
-    return mapped;
+    if (this.opening) return;
+    const { text, presses } = this.input.feed(chunk);
+    if (text) pty.write(text);
+    for (const pasted of this.pastes.feed(text)) this.tracker?.pasted(pasted);
+    this.checkPastesSoon();
+    for (const index of presses) this.serial(() => this.onHotkey(index === 1 ? "list" : "save"));
+    if (this.escTimer) clearTimeout(this.escTimer);
+    if (this.input.hasPending) this.escTimer = setTimeout(() => !this.panelOpen && this.flushInput(), ESC_FLUSH_MS);
   }
-  /**
-   * The text with every placeholder replaced, or null when one of them can't be matched to a paste
-   * that fits it; never a wrong paste's text.
-   */
-  expand(text) {
-    const bySize = this.label.key === "chars" ? this.sizeQueues(text) : null;
-    let unknown = false;
-    const out = text.replace(this.label.pattern, (whole, n, extra) => {
-      const pasted = bySize ? bySize.get(Number(n))?.shift() : this.byNumber.get(Number(n));
-      if (pasted === void 0 || !bySize && !_PasteLabels.fits(pasted, extra)) unknown = true;
-      return pasted ?? whole;
+  dispose() {
+    for (const timer of [this.escTimer, this.pasteTimer]) if (timer) clearTimeout(timer);
+    this.deps.display.dispose();
+  }
+  forPanel(chunk, effectOf) {
+    const keys = this.input.decodeOnly(chunk);
+    if (keys) this.serial(async () => this.apply(await effectOf(keys)));
+  }
+  serial(fn) {
+    this.queue = this.queue.then(fn).catch((err) => {
+      debug("error", describeError(err), { stack: err instanceof Error ? err.stack : void 0 });
+      this.deps.display.toast({ text: `error: ${describeError(err)}`, error: true });
     });
-    return unknown ? null : out;
   }
-  // For k placeholders of one size, the last k pastes of that size, oldest first: the box
-  // lists pastes in the order they were made.
-  sizeQueues(text) {
-    const wanted = /* @__PURE__ */ new Map();
-    for (const match of text.matchAll(this.label.pattern)) wanted.set(Number(match[1]), (wanted.get(Number(match[1])) ?? 0) + 1);
-    const queues = /* @__PURE__ */ new Map();
-    for (const [size, count] of wanted) queues.set(size, this.recent.filter((p) => charCount(p) === size).slice(-count));
-    return queues;
+  async onHotkey(which) {
+    debug("keys", `${which} hotkey`, { panelOpen: this.panelOpen, record: Boolean(this.deps.record) });
+    if (this.deps.record) return this.deps.display.toast({ text: `recorded ${await this.deps.record()}` });
+    if (this.panelOpen) return;
+    this.opening = true;
+    if (this.escTimer) clearTimeout(this.escTimer);
+    this.flushInput();
+    try {
+      await (which === "list" ? this.openList() : this.openPicker());
+    } finally {
+      this.opening = false;
+    }
   }
-};
-var PENDING_MS = 5e3;
-var PasteTracker = class {
-  constructor(labels, screenText, now = Date.now) {
-    this.labels = labels;
-    this.screenText = screenText;
-    this.now = now;
+  async openList() {
+    const { adapter, ctx, keys, display } = this.deps;
+    const draft = await this.readDraft();
+    const data = await panelData(ctx);
+    this.skills ??= adapter.skills(ctx.cwd);
+    const ui = new ListPanel(data.prompts, {
+      cwd: ctx.cwd,
+      hotkeyLabel: keys.save.label,
+      scope: this.last.scope,
+      shelves: data.shelves,
+      starredShelves: data.starred,
+      skills: this.skills,
+      agent: adapter.displayName,
+      tab: this.last.tab,
+      sort: this.last.sort
+    });
+    this.list = { ui, hadDraft: draft !== null };
+    display.show(ui);
   }
-  labels;
-  screenText;
-  now;
-  pending = [];
-  get waiting() {
-    return this.pending.length > 0;
+  async openPicker() {
+    const { adapter, ctx, display } = this.deps;
+    const draft = await this.readDraft();
+    if (!draft) return display.toast({ text: "nothing to stash" });
+    const text = this.tracker ? this.tracker.expand(draft.text) : draft.text;
+    if (text === null) debug("paste", "a collapsed paste could not be matched", { waiting: this.tracker?.waiting });
+    if (text === null || adapter.unsafeDraft.test(text)) return display.toast({ text: "draft contains a collapsed paste \u2014 expand it first", error: true });
+    const data = await panelData(ctx);
+    this.picker = { ui: new SavePicker(text, data.shelves, data.starred), draft, text };
+    display.show(this.picker.ui, PICKER_ROWS);
   }
-  pasted(text) {
-    this.labels.remember(text);
-    this.pending.push({ text, at: this.now() });
+  closePanel() {
+    if (this.list) this.last = { scope: this.list.ui.scope, tab: this.list.ui.tab, sort: this.list.ui.sort };
+    this.list = null;
+    this.picker = null;
+    this.deps.display.hide();
   }
-  check() {
-    this.match();
-    const now = this.now();
-    this.pending = this.pending.filter((p) => now - p.at < PENDING_MS);
+  /** Carries out an effect, in the order `Effect` documents. */
+  async apply(effect) {
+    debug("effect", Object.keys(effect).join(",") || "none", effect.status ? { status: effect.status.text } : void 0);
+    const { adapter, ctx, pty, display } = this.deps;
+    const hadDraft = this.list?.hadDraft ?? false;
+    if (effect.clearDraft && this.picker) pty.write(adapter.clearDraft(this.picker.draft));
+    if (effect.close) this.closePanel();
+    if (effect.insert !== void 0) await injectPaste(pty, hadDraft ? "\n" + effect.insert : effect.insert);
+    if (effect.refresh && this.list) {
+      const data = await panelData(ctx);
+      this.list.ui.update(data.prompts, data.shelves, data.starred);
+    }
+    if (effect.showShelf && this.list) this.list.ui.showShelf(effect.showShelf);
+    if (effect.status) display.toast(effect.status);
+    else display.redraw();
   }
-  expand(draft) {
-    this.match();
-    return this.labels.expand(draft);
+  async readDraft() {
+    const { adapter, screen } = this.deps;
+    await screen.write("");
+    const lines = screen.lines({ dropDim: adapter.dimPlaceholder });
+    const draft = adapter.readDraft(lines, screen.cursor(), screen.cols);
+    debug("draft", draft ? "read" : "none", { inputTop: adapter.inputTop(lines), cursor: screen.cursor(), chars: draft?.text.length, lines: draft?.text.split("\n").length });
+    return draft;
   }
-  match() {
-    if (this.pending.length && this.labels.learn(this.screenText(), this.pending.map((p) => p.text))) this.pending = [];
+  flushInput() {
+    const rest = this.input.flush();
+    if (rest) this.deps.pty.write(rest);
+  }
+  checkPastesSoon() {
+    const tracker = this.tracker;
+    if (!tracker?.waiting || this.pasteTimer) return;
+    this.pasteTimer = setTimeout(() => {
+      this.pasteTimer = null;
+      tracker.check();
+      this.checkPastesSoon();
+    }, PASTE_CHECK_MS);
   }
 };
 
 // src/session/run.ts
-var TOAST_MS = 3e3;
-var ESC_FLUSH_MS = 25;
-var PASTE_CHECK_MS = 100;
-var TOAST_REDRAW_MS = 80;
-var PICKER_ROWS = 3;
-var describeError = (err) => err instanceof Error ? err.message : String(err);
-var isCmdScript = (file) => /\.(cmd|bat)$/i.test(file);
-function passthrough(command, args, env) {
-  return new Promise((resolve, reject) => {
-    const child = spawn2(command, args, { stdio: "inherit", env, shell: isCmdScript(command) });
-    const ignoreSigint = () => {
-    };
-    process.on("SIGINT", ignoreSigint);
-    child.on("error", (err) => {
-      process.off("SIGINT", ignoreSigint);
-      reject(err);
-    });
-    child.on("exit", (code, signal) => {
-      process.off("SIGINT", ignoreSigint);
-      resolve(code ?? (signal ? 128 + (osConstants.signals[signal] ?? 0) : 0));
-    });
-  });
-}
 async function runApp(opts) {
   const { adapter } = opts;
-  const childEnv = { ...process.env, PATH: stripShimDir(process.env.PATH) };
-  const real = findRealBinary(adapter.command, childEnv);
-  if (!real) throw new Error(`${adapter.command} not found on PATH (install ${adapter.name} first)`);
-  if (process.env.STASH_OFF) return passthrough(real, opts.args, childEnv);
+  const env = { ...process.env, PATH: stripShimDir(process.env.PATH) };
+  const real = findRealBinary(adapter.command, env);
+  if (!real) throw new UserError(`${adapter.command} not found on PATH (install ${adapter.displayName} first)`);
+  if (process.env.STASH_OFF) return passthrough(real, opts.args, env);
+  const keys = sessionKeys(await loadConfig(), adapter);
   const command = isCmdScript(real) ? process.env.comspec ?? "cmd.exe" : real;
   const args = isCmdScript(real) ? ["/c", real, ...opts.args] : opts.args;
   const record = opts.record || Boolean(process.env.STASH_RECORD);
-  const config = await loadConfig();
-  for (const [spec, fix] of [
-    [config.hotkey, "stash hotkey <key>"],
-    [config.listHotkey, "stash hotkey list <key>"]
-  ]) {
-    if (adapter.reservedKeys.includes(spec.toLowerCase())) {
-      process.stderr.write(`prompt-shelf: hotkey ${spec} is reserved by ${adapter.name}; pick another with \`${fix}\`
-`);
-      return 2;
-    }
-  }
-  const stashKey = parseHotkey(config.hotkey);
-  const listKey = parseHotkey(config.listHotkey);
-  if (listKey.label === stashKey.label) {
-    process.stderr.write(`prompt-shelf: the stash and list hotkeys are both ${stashKey.label}; change one with \`stash hotkey list <key>\`
-`);
-    return 2;
-  }
-  const hotkeys = [stashKey, listKey];
-  const LIST_KEY_INDEX = 1;
-  const isKey = (chunk, key) => key.sequences.some((seq) => chunk.equals(seq));
+  const { stdin, stdout } = process;
   const cwd = process.cwd();
-  const ctx = {
-    store: new Store(stashFile),
-    shelves: new Shelves(shelvesFile),
-    agent: adapter.name,
-    cwd,
-    skillPrompt: adapter.skillPrompt
-  };
-  const stdout = process.stdout;
-  const stdin = process.stdin;
-  const cols = () => stdout.columns || 80;
-  const rows = () => stdout.rows || 24;
-  const screen = new Screen(cols(), rows());
-  const input = new StdinPipeline(new KeyInterceptor(hotkeys));
-  const pty = spawnAgent({ command, args, cols: cols(), rows: rows(), cwd, env: childEnv });
-  let lastScope = "repo";
-  let lastTab = { kind: "stash" };
-  let lastSort = "newest";
-  let skills = null;
-  let overlay = null;
-  let picker = null;
-  let opening = false;
-  const panelOpen = () => overlay !== null || picker !== null || opening;
-  let panel = null;
-  let hadDraft = false;
-  const pastes = new PasteRecorder();
-  const tracker = adapter.pasteLabel ? new PasteTracker(new PasteLabels(adapter.pasteLabel), () => screen.lines().join("\n")) : null;
-  let pasteTimer = null;
-  let toastTimer = null;
-  let toastBar = null;
-  let toastRedraw = null;
-  let escTimer = null;
-  const repaintAgent = () => {
-    stdout.write(ansi.clearScreen + ansi.home + screen.serialize() + ansi.showCursor);
-  };
-  const inputAnchor = () => {
-    const lines = screen.lines();
-    const inputTop = adapter.inputTop(lines);
-    const hasBorderAbove = inputTop !== null && inputTop > 0 && adapter.isBorder(lines[inputTop - 1] ?? "");
-    return { rows: rows(), inputTop, hasBorderAbove };
-  };
-  const drawPanel = (status) => {
-    const ui = overlay ?? picker?.ui;
-    if (!ui) return;
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = null;
-    toastBar = null;
-    const next = panelPlacement(inputAnchor(), overlay ? void 0 : PICKER_ROWS);
-    if (panel && (panel.top !== next.top || panel.height !== next.height)) repaintAgent();
-    panel = next;
-    const frame = ui.render(cols(), next.height, status).split("\r\n");
-    stdout.write(ansi.hideCursor + frame.map((line, i) => ansi.moveTo(next.top + i, 0) + line).join(""));
-  };
-  const closePanel = () => {
-    if (overlay) {
-      lastScope = overlay.scope;
-      lastTab = overlay.tab;
-      lastSort = overlay.sort;
-    }
-    overlay = null;
-    picker = null;
-    panel = null;
-    repaintAgent();
-  };
-  const drawToast = () => {
-    if (!toastBar || panelOpen()) return;
-    stdout.write("\x1B7" + ansi.moveTo(toastRow(inputAnchor()), 0) + toastBar + "\x1B8");
-  };
-  const toast = (status) => {
-    if (toastTimer) clearTimeout(toastTimer);
-    if (overlay || picker) {
-      drawPanel(status);
-      toastTimer = setTimeout(() => drawPanel(), TOAST_MS);
-      return;
-    }
-    toastBar = ansi.reverse + (status.error ? theme.error : "") + fitLine(` ${status.text} `, cols()) + ansi.reset;
-    drawToast();
-    toastTimer = setTimeout(() => {
-      toastBar = null;
-      repaintAgent();
-    }, TOAST_MS);
-  };
-  let queue = Promise.resolve();
-  const serial = (fn) => {
-    queue = queue.then(fn).catch((err) => toast({ text: `error: ${describeError(err)}`, error: true }));
-  };
-  const onProcessError = (err) => toast({ text: `error: ${describeError(err)}`, error: true });
-  const readDraft = async () => {
-    await screen.write("");
-    return adapter.readDraft(screen.lines({ dropDim: adapter.dimPlaceholder }), screen.cursor(), screen.cols);
-  };
-  const placeText = async (text) => {
-    await injectPaste(pty, hadDraft ? "\n" + text : text);
-    hadDraft = false;
-  };
-  const applyEffect = async (effect) => {
-    if (effect.clearDraft && picker) pty.write(adapter.clearDraft(picker.draft));
-    if (effect.close) closePanel();
-    if (effect.insert !== void 0) await placeText(effect.insert);
-    if (effect.refresh && overlay) {
-      const data = await panelData(ctx);
-      overlay.update(data.prompts, data.shelves, data.starred);
-    }
-    if (effect.showShelf && overlay) overlay.showShelf(effect.showShelf);
-    if (effect.status) toast(effect.status);
-    else if (overlay || picker) drawPanel();
-  };
-  const beforeOpening = () => {
-    if (escTimer) clearTimeout(escTimer);
-    const rest = input.flush();
-    if (rest) pty.write(rest);
-  };
-  const openList = async () => {
-    const draft = await readDraft();
-    const data = await panelData(ctx);
-    skills ??= adapter.skills(cwd);
-    hadDraft = draft !== null;
-    overlay = new Overlay(data.prompts, {
-      cwd,
-      hotkeyLabel: stashKey.label,
-      scope: lastScope,
-      shelves: data.shelves,
-      starredShelves: data.starred,
-      skills,
-      agent: adapter.displayName,
-      tab: lastTab,
-      sort: lastSort
-    });
-    drawPanel();
-  };
-  const openPicker = async () => {
-    const draft = await readDraft();
-    if (!draft) return toast({ text: "nothing to stash" });
-    const text = tracker ? tracker.expand(draft.text) : draft.text;
-    if (text === null || adapter.unsafeDraft.test(text)) return toast({ text: "draft contains a collapsed paste \u2014 expand it first", error: true });
-    const data = await panelData(ctx);
-    picker = { ui: new SavePicker(text, data.shelves, data.starred), draft, text };
-    drawPanel();
-  };
-  const recordFrame = async () => {
-    await screen.write("");
-    const file = join3(stashDir, `record-${adapter.name}-${Date.now()}.txt`);
-    await writeFile2(file, screen.lines().join("\n") + `
---- cursor ${JSON.stringify(screen.cursor())}
-`);
-    toast({ text: `recorded ${file}` });
-  };
-  const onHotkey = async (index) => {
-    if (record) return recordFrame();
-    if (panelOpen()) return;
-    opening = true;
-    beforeOpening();
-    try {
-      await (index === LIST_KEY_INDEX ? openList() : openPicker());
-    } finally {
-      opening = false;
-    }
-  };
-  const checkPastesSoon = () => {
-    if (!tracker?.waiting || pasteTimer) return;
-    pasteTimer = setTimeout(() => {
-      pasteTimer = null;
-      tracker.check();
-      checkPastesSoon();
-    }, PASTE_CHECK_MS);
-  };
-  pty.onData((data) => {
-    try {
-      void screen.write(data);
-      if (!panelOpen()) stdout.write(data);
-      checkPastesSoon();
-      if (toastBar && !panelOpen()) {
-        if (toastRedraw) clearTimeout(toastRedraw);
-        toastRedraw = setTimeout(drawToast, TOAST_REDRAW_MS);
-      }
-    } catch (err) {
-      toast({ text: `error: ${describeError(err)}`, error: true });
-    }
+  const screen = new Screen(stdout.columns || 80, stdout.rows || 24);
+  const display = new Display(stdout, screen, adapter);
+  debug("session", "start", { agent: adapter.name, cols: display.cols, rows: display.rows, record });
+  const pty = spawnAgent({ command, args, cols: display.cols, rows: display.rows, cwd, env });
+  const session = new Session({
+    adapter,
+    ctx: { store: new Store(promptsFile), shelves: new Shelves(shelvesFile), agent: adapter.name, cwd, skillPrompt: adapter.skillPrompt },
+    pty,
+    screen,
+    display,
+    keys,
+    ...record ? { record: () => recordScreen(screen, stashDir, adapter.name) } : {}
   });
+  const onError = (err) => {
+    debug("error", describeError(err), { stack: err instanceof Error ? err.stack : void 0 });
+    display.toast({ text: `error: ${describeError(err)}`, error: true });
+  };
+  const guarded = (fn) => (arg) => {
+    try {
+      fn(arg);
+    } catch (err) {
+      onError(err);
+    }
+  };
+  pty.onData(guarded((data) => session.agentOutput(data)));
   stdin.setRawMode?.(true);
   stdin.resume();
-  stdin.on("data", (chunk) => {
-    if (picker) {
-      const ui = picker.ui;
-      const text2 = picker.text;
-      if (isKey(chunk, stashKey)) serial(async () => applyEffect(await pickerEffect(ctx, ui.confirm(), text2)));
-      else if (isKey(chunk, listKey)) closePanel();
-      else {
-        const keys = input.decodeOnly(chunk);
-        if (keys) serial(async () => applyEffect(await pickerEffect(ctx, ui.handleKey(keys), text2)));
-      }
-      return;
-    }
-    if (overlay) {
-      const ui = overlay;
-      if (hotkeys.some((key) => isKey(chunk, key))) closePanel();
-      else {
-        const keys = input.decodeOnly(chunk);
-        if (keys) serial(async () => applyEffect(await overlayEffect(ctx, ui.handleKey(keys), hadDraft)));
-      }
-      return;
-    }
-    if (opening) return;
-    const { text, presses } = input.feed(chunk);
-    if (text) pty.write(text);
-    for (const pasted of pastes.feed(text)) tracker?.pasted(pasted);
-    checkPastesSoon();
-    for (const index of presses) serial(() => onHotkey(index));
-    if (escTimer) clearTimeout(escTimer);
-    if (input.hasPending) {
-      escTimer = setTimeout(() => {
-        if (panelOpen()) return;
-        const rest = input.flush();
-        if (rest) pty.write(rest);
-      }, ESC_FLUSH_MS);
-    }
+  stdin.on("data", guarded((chunk) => session.userInput(chunk)));
+  const onResize = guarded(() => {
+    screen.resize(display.cols, display.rows);
+    pty.resize(display.cols, display.rows);
+    display.redraw();
   });
-  stdout.on("resize", () => {
-    screen.resize(cols(), rows());
-    pty.resize(cols(), rows());
-    drawPanel();
-  });
-  process.on("uncaughtException", onProcessError);
-  process.on("unhandledRejection", onProcessError);
+  stdout.on("resize", onResize);
+  process.on("uncaughtException", onError);
+  process.on("unhandledRejection", onError);
   return new Promise((resolve) => {
     pty.onExit((code) => {
-      for (const timer of [escTimer, toastTimer, toastRedraw, pasteTimer]) if (timer) clearTimeout(timer);
-      process.off("uncaughtException", onProcessError);
-      process.off("unhandledRejection", onProcessError);
-      if (overlay || picker) closePanel();
+      session.dispose();
+      process.off("uncaughtException", onError);
+      process.off("unhandledRejection", onError);
+      stdout.off("resize", onResize);
       stdout.write(ansi.saneEpilogue);
       stdin.setRawMode?.(false);
       stdin.pause();
@@ -1681,10 +1767,7 @@ async function runApp(opts) {
   });
 }
 
-// src/cli/main.ts
-import { existsSync as existsSync2 } from "fs";
-import { basename as basename2, join as join4 } from "path";
-var { version } = package_default;
+// src/cli/args.ts
 var SHELF_ACTIONS = ["new", "rename", "rm", "star"];
 var SHELF_USAGE = "usage: stash shelf new <name> | rename <old> <new> | star <name> | rm <name> [--force]";
 function parseFlags(command, args, allowed) {
@@ -1696,17 +1779,18 @@ function parseFlags(command, args, allowed) {
       positional.push(a);
       continue;
     }
-    if (!allowed.includes(a)) throw new Error(`stash ${command} doesn't take ${a}`);
+    if (!allowed.includes(a)) throw new UserError(`stash ${command} doesn't take ${a}`, 2);
     if (a === "--all") flags.all = true;
     else if (a === "--force") flags.force = true;
     else {
       const name = args[++i];
-      if (!name) throw new Error("--shelf needs a shelf name");
+      if (!name) throw new UserError("--shelf needs a shelf name", 2);
       flags.shelf = name;
     }
   }
   return { ...flags, positional };
 }
+var view = ({ all, shelf }) => ({ all, ...shelf ? { shelf } : {} });
 function parseArgs(argv) {
   let record = false;
   const rest = [...argv];
@@ -1717,32 +1801,42 @@ function parseArgs(argv) {
   const [first, ...args] = rest;
   if (!first || first === "--help" || first === "-h") return { kind: "help" };
   if (first === "--version" || first === "-v") return { kind: "version" };
-  const view = ({ all, shelf }) => ({ all, ...shelf ? { shelf } : {} });
-  if (first === "list") return { kind: "list", ...view(parseFlags(first, args, ["--all", "--shelf"])) };
-  if (first === "add") {
-    const { positional, shelf } = parseFlags(first, args, ["--shelf"]);
-    return { kind: "add", text: positional.join(" "), ...shelf ? { shelf } : {} };
+  switch (first) {
+    case "list":
+      return { kind: "list", ...view(parseFlags(first, args, ["--all", "--shelf"])) };
+    case "add": {
+      const { positional, shelf } = parseFlags(first, args, ["--shelf"]);
+      return { kind: "add", text: positional.join(" "), ...shelf ? { shelf } : {} };
+    }
+    case "rm": {
+      const flags = parseFlags(first, args, ["--all", "--shelf"]);
+      return { kind: "rm", ref: flags.positional[0] ?? "", ...view(flags) };
+    }
+    case "pop": {
+      const { positional, all } = parseFlags(first, args, ["--all"]);
+      return { kind: "pop", ref: positional[0], all };
+    }
+    case "shelves":
+      return { kind: "shelves" };
+    case "shelf": {
+      const { positional, force } = parseFlags(first, args, ["--force"]);
+      const [action, ...names] = positional;
+      if (!SHELF_ACTIONS.includes(action)) throw new UserError(SHELF_USAGE, 2);
+      return { kind: "shelf", action, names, force };
+    }
+    case "enable":
+    case "disable":
+    case "doctor":
+      return { kind: first };
+    case "hotkey":
+      return args[0] === "list" ? { kind: "hotkey", list: true, spec: args[1] } : { kind: "hotkey", list: false, spec: args[0] };
+    default:
+      return { kind: "run", agent: first, args, record };
   }
-  if (first === "rm") {
-    const flags = parseFlags(first, args, ["--all", "--shelf"]);
-    return { kind: "rm", ref: flags.positional[0] ?? "", ...view(flags) };
-  }
-  if (first === "pop") {
-    const { positional, all } = parseFlags(first, args, ["--all"]);
-    return { kind: "pop", ref: positional[0], all };
-  }
-  if (first === "shelves") return { kind: "shelves" };
-  if (first === "shelf") {
-    const { positional, force } = parseFlags(first, args, ["--force"]);
-    const [action, ...names] = positional;
-    if (!SHELF_ACTIONS.includes(action)) throw new Error(SHELF_USAGE);
-    return { kind: "shelf", action, names, force };
-  }
-  if (first === "enable" || first === "disable" || first === "doctor") return { kind: first };
-  if (first === "hotkey") return args[0] === "list" ? { kind: "hotkey", list: true, spec: args[1] } : { kind: "hotkey", list: false, spec: args[0] };
-  return { kind: "run", agent: first, args, record };
 }
-var help = `prompt-shelf ${version}
+
+// src/cli/help.ts
+var helpText = (version2) => `prompt-shelf ${version2}
 
 Usage:
   stash <agent> [agent args...]   run an agent with stash support (${adapterNames.join(", ")})
@@ -1761,201 +1855,205 @@ Shelves (named lists of prompts you reuse; using one keeps it):
   stash add --shelf <name> <text> save a prompt on a shelf (created if needed)
   stash list --shelf <name>       print the prompts on a shelf
   stash rm <n> --shelf <name>     remove prompt n from a shelf
+
+Setup:
   stash enable                    install shims so plain ${adapterNames.join(" / ")} run through stash
   stash disable                   remove the shims and the PATH line
-  stash doctor                    show shim dir, shims, and real agent binaries
+  stash doctor                    show versions, paths, shims and real agent binaries
   stash hotkey [key]              show both hotkeys, or set the stash hotkey (ctrl+<letter> or f1..f12), e.g. stash hotkey f2
   stash hotkey list [key]         show or set the list hotkey
 
 Env:
   STASH_OFF=1 <agent>             run the real binary directly (no wrapper)
   STASH_RECORD=1 <agent>          same as stash --record <agent>
+  PROMPT_SHELF_DIR=<dir>          keep prompts, shelves and settings in <dir>
+  PROMPT_SHELF_DEBUG=1            write a debug log to ~/.prompt-shelf/debug.log (or =<file>)
 
 Hotkeys:
-  ctrl+f  save what is in the box: enter keeps it in the stash, \u2190\u2192 picks a shelf
-  ctrl+q  open the list (stash, skills, shelves); what you pick goes after what you typed
-Config: ~/.prompt-shelf/config.json  { "hotkey": "ctrl+f", "listHotkey": "ctrl+q" }
+  ${DEFAULT_CONFIG.hotkey}  save what is in the box: enter keeps it in the stash, \u2190\u2192 picks a shelf
+  ${DEFAULT_CONFIG.listHotkey}  open the list (stash, skills, shelves); what you pick goes after what you typed
+Config: ~/.prompt-shelf/config.json  ${JSON.stringify(DEFAULT_CONFIG).replace(/,/g, ", ").replace(/:/g, ": ").replace(/^\{/, "{ ").replace(/\}$/, " }")}
 `;
-async function runHotkeyCommand(spec, filePath = configFile, list = false) {
-  const config = await loadConfig(filePath);
-  if (spec === void 0) {
-    if (list) return { code: 0, message: `list hotkey: ${config.listHotkey}` };
-    return { code: 0, message: `hotkey: ${config.hotkey}
-list hotkey: ${config.listHotkey}` };
-  }
-  let label;
-  try {
-    label = parseHotkey(spec).label;
-  } catch (err) {
-    return { code: 1, message: err instanceof Error ? err.message : String(err) };
-  }
-  const owners = reservedBy(label);
-  if (owners.length) return { code: 1, message: `${label} is reserved by ${owners.join(", ")}; pick another` };
-  const other = list ? config.hotkey : config.listHotkey;
-  if (label === other) return { code: 1, message: `${label} is already the ${list ? "stash" : "list"} hotkey; pick another` };
-  await saveConfig(list ? { listHotkey: label } : { hotkey: label }, filePath);
-  return { code: 0, message: `${list ? "list hotkey" : "hotkey"} set to ${label} \u2014 takes effect in new sessions` };
-}
-var scopeOf = ({ all }) => all ? "all" : "repo";
+
+// src/cli/prompt-commands.ts
+import { basename as basename2 } from "path";
 var REMOVED_PREVIEW = 60;
-var preview = (e) => {
-  const flat = e.text.replace(/\r?\n/g, " \u23CE ");
-  return [...flat].length > REMOVED_PREVIEW ? [...flat].slice(0, REMOVED_PREVIEW).join("") + "\u2026" : flat;
-};
-var describeRemoved = (e) => `removed: [${e.shelf ? `shelf ${e.shelf}` : `${e.agent} \xB7 ${basename2(e.cwd)}`}] ${preview(e)}`;
-var formatEntry = (e, i) => {
-  const text = e.text.replace(/\r?\n/g, " \u23CE ");
-  if (e.shelf === void 0) return `${i + 1}. [${e.agent} \xB7 ${e.cwd}] ${text}`;
-  const used = e.usedCount ? `used ${e.usedCount}\xD7, last ${localTime(e.lastUsedAt)}` : "not used yet";
+var describeRemoved = (p) => `removed: [${p.shelf ? `shelf ${p.shelf}` : `${p.agent} \xB7 ${basename2(p.cwd)}`}] ${clip(flatten(p.text), REMOVED_PREVIEW)}`;
+var formatPrompt = (p, i) => {
+  const text = flatten(p.text);
+  if (p.shelf === void 0) return `${i + 1}. [${p.agent} \xB7 ${p.cwd}] ${text}`;
+  const used = p.usedCount ? `used ${p.usedCount}\xD7, last ${localTime(p.lastUsedAt)}` : "not used yet";
   return `${i + 1}. ${text}
-   saved ${localTime(e.createdAt)} \xB7 ${used}`;
+   saved ${localTime(p.createdAt)} \xB7 ${used}`;
 };
-function viewEntries(entries, scope) {
-  if (scope.shelf) return entries.filter(onShelf(scope.shelf));
-  return scoped(entries.filter(isStashDraft), scopeOf(scope), scope.cwd);
+function viewPrompts(prompts, scope) {
+  if (scope.shelf) return prompts.filter(onShelf(scope.shelf));
+  return scoped(prompts.filter(isStashDraft), scope.all ? "all" : "repo", scope.cwd);
 }
-function listLines(entries, scope) {
-  const shown = viewEntries(entries, scope);
-  const lines = shown.map(formatEntry);
+function listLines(prompts, scope) {
+  const shown = viewPrompts(prompts, scope);
+  const lines = shown.map(formatPrompt);
   if (!scope.shelf) {
-    const hidden = entries.filter(isStashDraft).length - shown.length;
+    const hidden = prompts.filter(isStashDraft).length - shown.length;
     if (hidden > 0) lines.push(`${hidden} more in other repos \u2014 stash list --all`);
   }
   return lines;
 }
-function resolveRef(entries, ref, scope) {
-  const shown = viewEntries(entries, scope);
+function resolveRef(prompts, ref, scope) {
+  const shown = viewPrompts(prompts, scope);
   const n = Number.parseInt(ref ?? "1", 10);
-  if (!Number.isInteger(n) || n < 1 || n > shown.length) throw new Error(`no entry ${ref ?? "1"} (have ${shown.length})`);
+  if (!Number.isInteger(n) || n < 1 || n > shown.length) throw new UserError(`no prompt ${ref ?? "1"} (have ${shown.length})`);
   return shown[n - 1];
 }
+
+// src/cli/setup-commands.ts
+import { existsSync as existsSync2 } from "fs";
+import { join as join5 } from "path";
+async function runHotkeyCommand(spec, filePath = configFile, list = false) {
+  const config = await loadConfig(filePath);
+  if (spec === void 0) return list ? `list hotkey: ${config.listHotkey}` : `hotkey: ${config.hotkey}
+list hotkey: ${config.listHotkey}`;
+  const { label } = parseHotkey(spec);
+  const owners = reservedBy(label);
+  if (owners.length) throw new UserError(`${label} is reserved by ${owners.join(", ")}; pick another`);
+  const other = list ? config.hotkey : config.listHotkey;
+  if (label === other) throw new UserError(`${label} is already the ${list ? "stash" : "list"} hotkey; pick another`);
+  await saveConfig(list ? { listHotkey: label } : { hotkey: label }, filePath);
+  return `${list ? "list hotkey" : "hotkey"} set to ${label} \u2014 takes effect in new sessions`;
+}
+function doctorLines(version2) {
+  const onPath = shimDirOnPath();
+  const debugLog = debugLogFile();
+  const lines = [
+    `prompt-shelf ${version2} \xB7 node ${process.version} \xB7 ${process.platform}`,
+    `data: ${stashDir}`,
+    `debug log: ${debugLog ?? "off (PROMPT_SHELF_DEBUG=1 turns it on)"}`,
+    `shim dir: ${shimDir}`,
+    `on PATH: ${onPath ? "yes" : "no"}`
+  ];
+  for (const { command } of allAdapters()) {
+    const shimmed = existsSync2(join5(shimDir, command)) || existsSync2(join5(shimDir, `${command}.cmd`));
+    lines.push(`${command}: shim ${shimmed ? "installed" : "missing"}, real binary ${findRealBinary(command) ?? "not found"}`);
+  }
+  if (!onPath) lines.push(`fix: ${pathHint()}`);
+  return lines;
+}
+
+// src/cli/shelf-commands.ts
+var plural = (n) => `${n} prompt${n === 1 ? "" : "s"}`;
 async function requireShelf(shelves, store, name) {
   const saved = await shelves.find(name);
   if (saved) return { name: saved, saved: true };
-  const orphan = withOrphans([], await store.list()).find((n) => n.toLowerCase() === name.trim().toLowerCase());
+  const orphan = findShelf(withOrphans([], await store.list()), name);
   if (orphan) return { name: orphan, saved: false };
-  throw new Error(`no shelf named "${name}" \u2014 stash shelves lists them`);
+  throw new UserError(`no shelf named "${name}" \u2014 stash shelves lists them`);
+}
+async function shelfLines(shelves, store) {
+  const prompts = await store.list();
+  const starred = await shelves.starred();
+  return withOrphans(await shelves.list(), prompts).map((name) => `${starred.includes(name) ? "\u2605 " : "  "}${name} (${prompts.filter(onShelf(name)).length})`);
 }
 async function runShelfCommand(cmd, shelves, store) {
   const [first, second] = cmd.names;
-  if (!first) throw new Error(`usage: stash shelf ${cmd.action} <name>${cmd.action === "rename" ? " <new name>" : ""}`);
-  if (cmd.action === "new") {
-    process.stderr.write(`shelf ${await shelves.create(first)} is ready
-`);
-    return 0;
-  }
+  if (!first) throw new UserError(`usage: stash shelf ${cmd.action} <name>${cmd.action === "rename" ? " <new name>" : ""}`, 2);
+  if (cmd.action === "new") return `shelf ${await shelves.create(first)} is ready`;
   const current = await requireShelf(shelves, store, first);
   if (cmd.action === "star") {
     if (!current.saved) await shelves.create(current.name);
-    process.stderr.write(`${await shelves.toggleStar(current.name) ? "starred" : "unstarred"} ${current.name}
-`);
-    return 0;
+    return `${await shelves.toggleStar(current.name) ? "starred" : "unstarred"} ${current.name}`;
   }
   if (cmd.action === "rename") {
-    if (!second) throw new Error("usage: stash shelf rename <old> <new>");
+    if (!second) throw new UserError("usage: stash shelf rename <old> <new>", 2);
     const renamed = current.saved ? await shelves.rename(current.name, second) : await shelves.create(second);
     await store.reshelve(current.name, renamed);
-    process.stderr.write(`renamed ${current.name} to ${renamed}
-`);
-    return 0;
+    return `renamed ${current.name} to ${renamed}`;
   }
   const count = (await store.list()).filter(onShelf(current.name)).length;
-  if (count && !cmd.force) throw new Error(`shelf ${current.name} has ${count} prompt${count === 1 ? "" : "s"}; add --force to delete them too`);
+  if (count && !cmd.force) throw new UserError(`shelf ${current.name} has ${plural(count)}; add --force to delete them too`);
   await store.reshelve(current.name, null);
   if (current.saved) await shelves.remove(current.name);
-  process.stderr.write(`deleted shelf ${current.name}${count ? ` and its ${count} prompt${count === 1 ? "" : "s"}` : ""}
-`);
-  return 0;
+  return `deleted shelf ${current.name}${count ? ` and its ${plural(count)}` : ""}`;
 }
+
+// src/cli/main.ts
+var { version } = package_default;
+var print = (lines) => {
+  const text = Array.isArray(lines) ? lines.join("\n") : lines;
+  if (text) process.stdout.write(text + "\n");
+};
+var tell = (message) => process.stderr.write(message + "\n");
 async function main(argv) {
-  const parsed = parseArgs(argv);
-  const store = new Store(stashFile);
+  try {
+    return await run(parseArgs(argv));
+  } catch (err) {
+    if (!(err instanceof UserError)) throw err;
+    tell(`prompt-shelf: ${err.message}`);
+    return err.exitCode;
+  }
+}
+async function run(cmd) {
+  const store = new Store(promptsFile);
   const shelves = new Shelves(shelvesFile);
-  switch (parsed.kind) {
+  const cwd = process.cwd();
+  const shelfNamed = async (name) => name ? (await requireShelf(shelves, store, name)).name : void 0;
+  switch (cmd.kind) {
     case "help":
-      process.stdout.write(help);
+      process.stdout.write(helpText(version));
       return 0;
     case "version":
-      process.stdout.write(version + "\n");
+      print(version);
       return 0;
-    case "list": {
-      const shelf = parsed.shelf ? (await requireShelf(shelves, store, parsed.shelf)).name : void 0;
-      const lines = listLines(await store.list(), { ...parsed, shelf, cwd: process.cwd() });
-      if (lines.length) process.stdout.write(lines.join("\n") + "\n");
+    case "list":
+      print(listLines(await store.list(), { ...cmd, shelf: await shelfNamed(cmd.shelf), cwd }));
       return 0;
-    }
     case "add": {
-      if (!parsed.text) throw new Error("nothing to add");
-      const shelf = parsed.shelf ? await shelves.create(parsed.shelf) : void 0;
-      await store.add({ text: parsed.text, agent: "cli", cwd: process.cwd(), ...shelf ? { shelf } : {} });
-      if (shelf) process.stderr.write(`saved on shelf ${shelf}
-`);
+      if (!cmd.text) throw new UserError("nothing to add", 2);
+      const shelf = cmd.shelf ? await shelves.create(cmd.shelf) : void 0;
+      await store.add({ text: cmd.text, agent: "cli", cwd, ...shelf ? { shelf } : {} });
+      if (shelf) tell(`saved on shelf ${shelf}`);
       return 0;
     }
     case "pop": {
-      const entry = resolveRef(await store.list(), parsed.ref, { all: parsed.all, cwd: process.cwd() });
-      process.stdout.write(entry.text + "\n");
-      await store.remove(entry.id);
-      process.stderr.write(describeRemoved(entry) + "\n");
+      const prompt = resolveRef(await store.list(), cmd.ref, { all: cmd.all, cwd });
+      print(prompt.text);
+      await store.remove(prompt.id);
+      tell(describeRemoved(prompt));
       return 0;
     }
     case "rm": {
-      const shelf = parsed.shelf ? (await requireShelf(shelves, store, parsed.shelf)).name : void 0;
-      const entry = resolveRef(await store.list(), parsed.ref, { ...parsed, shelf, cwd: process.cwd() });
-      await store.remove(entry.id);
-      process.stderr.write(describeRemoved(entry) + "\n");
+      const prompt = resolveRef(await store.list(), cmd.ref, { ...cmd, shelf: await shelfNamed(cmd.shelf), cwd });
+      await store.remove(prompt.id);
+      tell(describeRemoved(prompt));
       return 0;
     }
     case "shelves": {
-      const entries = await store.list();
-      const starred = await shelves.starred();
-      const lines = withOrphans(await shelves.list(), entries).map((name) => `${starred.includes(name) ? "\u2605 " : "  "}${name} (${entries.filter(onShelf(name)).length})`);
-      process.stdout.write(lines.length ? lines.join("\n") + "\n" : "no shelves yet \u2014 stash shelf new <name>\n");
+      const lines = await shelfLines(shelves, store);
+      print(lines.length ? lines : "no shelves yet \u2014 stash shelf new <name>");
       return 0;
     }
     case "shelf":
-      return runShelfCommand(parsed, shelves, store);
-    case "enable": {
-      const lines = describeInstall(await installShims());
-      process.stdout.write(lines.join("\n") + "\n");
+      tell(await runShelfCommand(cmd, shelves, store));
       return 0;
-    }
-    case "disable": {
-      const lines = describeRemove(await removeShims());
-      process.stdout.write(lines.join("\n") + "\n");
+    case "enable":
+      print(describeInstall(await installShims()));
       return 0;
-    }
-    case "doctor": {
-      const onPath = shimDirOnPath();
-      const lines = [`shim dir: ${shimDir}`, `on PATH: ${onPath ? "yes" : "no"}`];
-      for (const name of adapterNames) {
-        const shimmed = existsSync2(join4(shimDir, name)) || existsSync2(join4(shimDir, `${name}.cmd`));
-        lines.push(`${name}: shim ${shimmed ? "installed" : "missing"}, real binary ${findRealBinary(name) ?? "not found"}`);
-      }
-      if (!onPath) lines.push(`fix: ${pathHint()}`);
-      process.stdout.write(lines.join("\n") + "\n");
+    case "disable":
+      print(describeRemove(await removeShims()));
       return 0;
-    }
-    case "hotkey": {
-      const { code, message } = await runHotkeyCommand(parsed.spec, configFile, parsed.list);
-      (code ? process.stderr : process.stdout).write(message + "\n");
-      return code;
-    }
+    case "doctor":
+      print(doctorLines(version));
+      return 0;
+    case "hotkey":
+      print(await runHotkeyCommand(cmd.spec, configFile, cmd.list));
+      return 0;
     case "run": {
-      const adapter = getAdapter(parsed.agent);
-      if (!adapter) throw new Error(`unknown agent "${parsed.agent}". Supported: ${adapterNames.join(", ")}`);
-      return runApp({ adapter, args: parsed.args, record: parsed.record });
+      const adapter = getAdapter(cmd.agent);
+      if (!adapter) throw new UserError(`unknown agent "${cmd.agent}". Supported: ${adapterNames.join(", ")}`, 2);
+      return runApp({ adapter, args: cmd.args, record: cmd.record });
     }
   }
 }
 export {
-  describeRemoved,
-  listLines,
-  main,
-  parseArgs,
-  resolveRef,
-  runHotkeyCommand,
-  runShelfCommand,
-  viewEntries
+  main
 };
 //# sourceMappingURL=cli.js.map

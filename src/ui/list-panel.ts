@@ -1,14 +1,16 @@
 import { basename } from 'node:path';
-import { isStashDraft, onShelf, type Prompt } from '../storage/prompt-store.js';
+import { isStashDraft, nextSort, onShelf, sortSaved, type Prompt, type SortOrder } from '../domain/prompt.js';
 import { scoped, type Scope } from '../domain/scope.js';
-import { ansi, theme } from '../terminal/ansi.js';
+import type { Skill } from '../domain/skill.js';
 import { ago } from '../domain/time.js';
+import { ansi, theme } from '../terminal/ansi.js';
 import { splitKeys } from '../terminal/keys.js';
-import { choiceRow, clip, flatten, keyHints, padCells, TextInput, truncateLine, visibleWidth } from './widgets.js';
-import type { Skill } from '../adapters/skill-files.js';
+import { clip, flatten, padCells, visibleWidth } from '../terminal/text.js';
+import type { Panel, Status } from './types.js';
+import { addNewHint, choiceRow, keyHints, panelFrame, shelfLabel, statusLine, styleStar, TextInput } from './widgets.js';
 
-/** What a key press asks the app to do; the panel itself never touches the store. */
-export type OverlayAction =
+/** What a key press asks the session to do; the panel itself never touches the store. */
+export type ListAction =
   | { type: 'none' }
   | { type: 'close' }
   /** Put a stash draft in the box and remove it from the stash. */
@@ -27,27 +29,12 @@ export type Tab = { kind: 'stash' } | { kind: 'skills' } | { kind: 'shelf'; name
 /** A row in the list: a prompt (stash draft or saved prompt), or a skill on the Skills tab. */
 export type Row = { kind: 'prompt'; prompt: Prompt } | { kind: 'skill'; skill: Skill };
 
-/** How a shelf is ordered; `o` cycles through them. The stash is always newest first. */
-export type SortOrder = 'newest' | 'most-used' | 'recent';
-const SORT_ORDERS: SortOrder[] = ['newest', 'most-used', 'recent'];
 const SORT_LABEL: Record<SortOrder, string> = { newest: 'newest first', 'most-used': 'most used', recent: 'recently used' };
-const nextSort = (order: SortOrder) => SORT_ORDERS[(SORT_ORDERS.indexOf(order) + 1) % SORT_ORDERS.length]!;
 
-function sortSaved(prompts: Prompt[], order: SortOrder): Prompt[] {
-  if (order === 'most-used') return [...prompts].sort((a, b) => (b.usedCount ?? 0) - (a.usedCount ?? 0));
-  if (order === 'recent') return [...prompts].sort((a, b) => (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? ''));
-  return prompts;
-}
-
-/** A message shown instead of the key hints for a moment. */
-export interface Status {
-  text: string;
-  error?: boolean;
-}
-
-export interface OverlayOptions {
+export interface ListPanelOptions {
   cwd: string;
-  hotkeyLabel?: string;
+  /** The save hotkey, named in the empty stash's hint. */
+  hotkeyLabel: string;
   scope?: Scope;
   /** Shelves in display order (starred first). */
   shelves?: string[];
@@ -69,7 +56,7 @@ const KEY_COLUMN = 11;
 type Mode = 'list' | 'filter' | 'confirm-delete' | 'pick-shelf' | 'new-shelf' | 'help';
 
 /** The list panel: tabs for the stash, skills and each shelf, and what the keys do in it. */
-export class Overlay {
+export class ListPanel implements Panel<ListAction> {
   private index = 0;
   private mode: Mode = 'list';
   private filterText = '';
@@ -88,14 +75,14 @@ export class Overlay {
   private readonly hotkeyLabel: string;
   private readonly cwd: string;
 
-  constructor(prompts: Prompt[], options: OverlayOptions) {
+  constructor(prompts: Prompt[], options: ListPanelOptions) {
     this.prompts = prompts;
     this.cwd = options.cwd;
     this.shelves = options.shelves ?? [];
     this.starredShelves = options.starredShelves ?? [];
     this.skills = options.skills ?? [];
     this.agent = options.agent ?? 'the agent';
-    this.hotkeyLabel = options.hotkeyLabel ?? 'ctrl+f';
+    this.hotkeyLabel = options.hotkeyLabel;
     this.currentScope = options.scope ?? 'repo';
     this.sortOrder = options.sort ?? 'newest';
     const start = options.tab ? this.tabs().findIndex((t) => sameTab(t, options.tab!)) : 0;
@@ -156,7 +143,7 @@ export class Overlay {
   }
 
   /** Handles a chunk of input; fast typing or a burst of arrows can arrive as one chunk. */
-  handleKey(chunk: string): OverlayAction {
+  handleKey(chunk: string): ListAction {
     for (const key of splitKeys(chunk)) {
       const action = this.handleOne(key);
       if (action.type !== 'none') return action;
@@ -164,7 +151,7 @@ export class Overlay {
     return { type: 'none' };
   }
 
-  private handleOne(key: string): OverlayAction {
+  private handleOne(key: string): ListAction {
     if (this.mode === 'filter') return this.handleFilterKey(key);
     if (this.mode === 'pick-shelf') return this.handlePickKey(key);
     if (this.mode === 'new-shelf') return this.handleNameKey(key);
@@ -257,11 +244,8 @@ export class Overlay {
       const top = Math.max(0, Math.min(this.index - Math.floor(bodyRows / 2), list.length - bodyRows));
       list.slice(top, top + bodyRows).forEach((row, i) => body.push(this.rowLine(row, top + i === this.index, cols)));
     }
-    const footer = status ? ` ${ansi.bold}${status.error ? theme.error : theme.success}${status.text}${ansi.reset}` : this.footer(cols);
-    const lines = [this.tabBar(cols), this.infoLine(cols, list.length), ...body.slice(0, bodyRows)].slice(0, Math.max(0, rows - 1));
-    while (lines.length < rows - 1) lines.push('');
-    if (rows > 0) lines.push(footer);
-    return lines.map((l) => ansi.clearLine + truncateLine(l, cols)).join('\r\n');
+    const footer = status ? statusLine(status) : this.footer(cols);
+    return panelFrame([this.tabBar(cols), this.infoLine(cols, list.length), ...body.slice(0, bodyRows)], footer, cols, rows);
   }
 
   private rowLine(row: Row, selected: boolean, cols: number): string {
@@ -353,15 +337,15 @@ export class Overlay {
   private tabName(tab: Tab): string {
     if (tab.kind === 'stash') return 'Stash';
     if (tab.kind === 'skills') return 'Skills';
-    return this.starredShelves.includes(tab.name) ? `★ ${tab.name}` : tab.name;
+    return shelfLabel(tab.name, this.starredShelves);
   }
 
   // The lists as tabs, then "+ new (n)", with "←→ switch list" on the right when there's room.
   private tabBar(cols: number): string {
-    const addNew = `  ${ansi.dim}+ new (${ansi.reset}${ansi.bold}${theme.accent}n${ansi.reset}${ansi.dim})${ansi.reset}`;
+    const addNew = addNewHint();
     const hint = '←→ switch list';
     const labels = this.tabs().map((t) => `${this.tabName(t)} ${this.tabRows(t).length}`);
-    const style = (l: string) => l.replace(/^★/, `${theme.star}★${ansi.reset}`).replace(/ (\d+)$/, ` ${ansi.dim}$1${ansi.reset}`);
+    const style = (l: string) => styleStar(l).replace(/ (\d+)$/, ` ${ansi.dim}$1${ansi.reset}`);
     const row = choiceRow(labels, this.tabIndex, cols - visibleWidth(addNew) - hint.length - 2, style) + addNew;
     const gap = cols - visibleWidth(row) - hint.length - 1;
     return gap > 0 ? `${row}${' '.repeat(gap)}${ansi.dim}${hint}${ansi.reset}` : row;
@@ -397,7 +381,7 @@ export class Overlay {
     this.mode = this.saveTargets().length ? 'pick-shelf' : 'new-shelf';
   }
 
-  private handlePickKey(key: string): OverlayAction {
+  private handlePickKey(key: string): ListAction {
     const targets = this.saveTargets();
     if (key === '\x1b[C' || key === '\x1b[D') {
       this.target = (this.target + (key === '\x1b[C' ? 1 : -1) + targets.length) % targets.length;
@@ -414,7 +398,7 @@ export class Overlay {
     return key === '\r' && prompt && shelf ? { type: 'save-to-shelf', prompt, shelf } : { type: 'none' };
   }
 
-  private handleNameKey(key: string): OverlayAction {
+  private handleNameKey(key: string): ListAction {
     const state = this.nameInput.handle(key);
     if (state === 'editing') return { type: 'none' };
     const prompt = this.saving;
@@ -425,7 +409,7 @@ export class Overlay {
     return { type: 'create-shelf', name, ...(prompt ? { prompt } : {}) };
   }
 
-  private handleFilterKey(key: string): OverlayAction {
+  private handleFilterKey(key: string): ListAction {
     if (key === '\r') this.mode = 'list';
     else if (key === '\x1b') {
       this.mode = 'list';

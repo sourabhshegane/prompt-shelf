@@ -1,7 +1,10 @@
-import type { OverlayAction, Status } from '../ui/list-panel.js';
+import { isStashDraft, type Prompt } from '../domain/prompt.js';
+import { withOrphans } from '../domain/shelf.js';
+import type { Store } from '../storage/prompt-store.js';
+import type { Shelves } from '../storage/shelf-store.js';
+import type { ListAction } from '../ui/list-panel.js';
 import type { PickerAction } from '../ui/save-picker.js';
-import { withOrphans, type Shelves } from '../storage/shelf-store.js';
-import { isStashDraft, type Prompt, type Store } from '../storage/prompt-store.js';
+import type { Status } from '../ui/types.js';
 
 /** What the actions work with; tests pass real stores in a temp folder. */
 export interface ActionContext {
@@ -39,7 +42,7 @@ const gone: Effect = { refresh: true, status: { text: 'that prompt was changed i
 const draftsLeft = async (ctx: ActionContext) => (await ctx.store.list()).filter(isStashDraft).length;
 
 /** Carries out a list-panel action. `hasDraft`: the agent's box already had text when the list opened. */
-export async function overlayEffect(ctx: ActionContext, action: OverlayAction, hasDraft: boolean): Promise<Effect> {
+export async function listEffect(ctx: ActionContext, action: ListAction, hasDraft: boolean): Promise<Effect> {
   switch (action.type) {
     case 'close':
       return { close: true };

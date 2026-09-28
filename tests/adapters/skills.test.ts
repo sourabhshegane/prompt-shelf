@@ -2,13 +2,13 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { claudeSkills, codexSkills, parseSkillFile, type SkillRoots } from '../../src/adapters/skill-files.js';
-import { claudeAdapter } from '../../src/adapters/claude.js';
-import { codexAdapter } from '../../src/adapters/codex.js';
+import { parseSkillFile } from '../../src/adapters/skill-files.js';
+import { claudeAdapter, claudeSkills } from '../../src/adapters/claude.js';
+import { codexAdapter, codexSkills, type CodexRoots } from '../../src/adapters/codex.js';
 
 let home: string;
 let repo: string;
-let roots: SkillRoots;
+let roots: CodexRoots;
 
 async function skill(dir: string, folder: string, body: string) {
   await mkdir(join(dir, folder), { recursive: true });
@@ -21,7 +21,7 @@ beforeEach(async () => {
   repo = join(root, 'repo');
   await mkdir(join(repo, '.git'), { recursive: true });
   await mkdir(join(repo, 'src'), { recursive: true });
-  roots = { home, codexHome: join(home, '.codex'), systemCodexSkills: join(root, 'etc-codex-skills') };
+  roots = { home, codexHome: join(home, '.codex'), systemSkills: join(root, 'etc-codex-skills') };
 });
 
 describe('parseSkillFile', () => {
@@ -59,7 +59,7 @@ describe('findSkills', () => {
       join(home, '.claude', 'plugins', 'installed_plugins.json'),
       JSON.stringify({ plugins: { 'lint@market': [{ installPath: plugin }], 'off@market': [{ installPath: join(home, 'plugins', 'off') }] } }),
     );
-    const found = claudeSkills(join(repo, 'src'), roots);
+    const found = claudeSkills(join(repo, 'src'), home);
     expect(found.map((s) => [s.name, s.source, s.description])).toEqual([
       ['deploy', 'project', 'Deploy it'],
       ['humanizer', 'personal', 'Humanize text'],
@@ -73,21 +73,21 @@ describe('findSkills', () => {
     await skill(join(home, '.claude', 'skills'), 'noisy', '---\nname: noisy\n---');
     await skill(join(home, '.claude', 'skills'), 'kept', '---\nname: kept\n---');
     await writeFile(join(home, '.claude', 'settings.json'), JSON.stringify({ skillOverrides: { noisy: 'off' } }));
-    expect(claudeSkills(repo, roots).map((s) => s.name)).toEqual(['kept']);
+    expect(claudeSkills(repo, home).map((s) => s.name)).toEqual(['kept']);
   });
 
   it('finds skills in symlinked folders, a common way to share them', async () => {
     await skill(join(home, 'shared'), 'breadth', '---\nname: breadth\n---');
     await mkdir(join(home, '.claude', 'skills'), { recursive: true });
     await symlink(join(home, 'shared', 'breadth'), join(home, '.claude', 'skills', 'breadth'));
-    expect(claudeSkills(repo, roots).map((s) => s.name)).toEqual(['breadth']);
+    expect(claudeSkills(repo, home).map((s) => s.name)).toEqual(['breadth']);
   });
 
   it('finds Codex skills in .agents/skills, ~/.agents/skills, the Codex home, machine-wide and built-ins', async () => {
     await skill(join(repo, '.agents', 'skills'), 'repo-skill', '---\nname: repo-skill\n---');
     await skill(join(home, '.agents', 'skills'), 'mine', '---\nname: mine\n---');
     await skill(join(home, '.codex', 'skills'), 'older', '---\nname: older\n---');
-    await skill(roots.systemCodexSkills, 'company', '---\nname: company\n---');
+    await skill(roots.systemSkills, 'company', '---\nname: company\n---');
     await skill(join(home, '.codex', 'skills', '.system'), 'imagegen', '---\nname: imagegen\n---');
     expect(codexSkills(join(repo, 'src'), roots).map((s) => [s.name, s.source])).toEqual([
       ['repo-skill', 'project'],
@@ -99,7 +99,7 @@ describe('findSkills', () => {
   });
 
   it('returns nothing when no skill folders exist', () => {
-    expect(claudeSkills(repo, roots)).toEqual([]);
+    expect(claudeSkills(repo, home)).toEqual([]);
     expect(codexSkills(repo, roots)).toEqual([]);
   });
 });
