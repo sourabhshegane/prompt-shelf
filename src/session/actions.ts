@@ -36,13 +36,7 @@ export interface Effect {
 /** The data the list panel shows: prompts, shelves (including ones only prompts still point at) and stars. */
 export async function panelData(ctx: ActionContext): Promise<{ prompts: Prompt[]; shelves: string[]; starred: string[] }> {
   const prompts = await ctx.store.list();
-  const realShelves = await ctx.shelves.list();
-  const allShelves = withOrphans(realShelves, prompts);
-  const orphans = allShelves.filter((s) => !realShelves.includes(s));
-  if (orphans.length > 0) {
-    console.error('DEBUG panelData: found orphan shelves', { real: realShelves, orphans, totalPrompts: prompts.length, promptsPerOrphan: Object.fromEntries(orphans.map((o) => [o, prompts.filter((p) => p.shelf === o).length])) });
-  }
-  return { prompts, shelves: allShelves, starred: await ctx.shelves.starred() };
+  return { prompts, shelves: withOrphans(await ctx.shelves.list(), prompts), starred: await ctx.shelves.starred() };
 }
 
 const gone: Effect = { refresh: true, status: { text: t('actions.changedOtherSession'), error: true } };
@@ -79,7 +73,6 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
     }
     case 'create-shelf': {
       const shelf = await ctx.shelves.create(action.name);
-      console.error('DEBUG: created shelf', { name: action.name, created: shelf });
       if (!action.prompt) return { refresh: true, showShelf: shelf, status: { text: t('actions.shelfReady', { name: shelf }) } };
       if (!(await ctx.store.setShelf(action.prompt.id, shelf))) return gone;
       return { refresh: true, status: { text: t('save.savedTo', { shelf }) } };
@@ -98,29 +91,21 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
       // Confirmation is handled in the UI
       // Check if shelf exists and use its canonical name, or if it's an orphan, just remove its prompts
       const canonicalName = await ctx.shelves.find(action.shelf);
-      console.error('DEBUG delete-shelf: attempting to delete', { requestedShelf: action.shelf, canonical: canonicalName, isOrphan: !canonicalName });
       if (canonicalName) {
         // Shelf exists in shelves file, delete it normally
         await ctx.shelves.remove(canonicalName);
-        console.error('DEBUG delete-shelf: deleted real shelf', { shelf: canonicalName });
         return { refresh: true, status: { text: t('cli.shelf.deletedMsg', { name: canonicalName, count: '' }) } };
       }
       // Shelf is an orphan (prompts point to it but it doesn't exist in shelves file)
       // Just remove its prompts by moving them to stash
       const count = await ctx.store.reshelve(action.shelf, null);
-      console.error('DEBUG delete-shelf: deleted orphan shelf', { shelf: action.shelf, promptsMoved: count });
       return { refresh: true, status: { text: `deleted ${action.shelf} (${count} prompts moved to stash)` } };
     }
     case 'rename-shelf': {
       // Check if shelf exists first (orphan shelves can't be renamed)
       const exists = await ctx.shelves.find(action.shelf);
-      console.error('DEBUG rename-shelf: attempting to rename', { oldName: action.shelf, newName: action.newName, exists });
-      if (!exists) {
-        console.error('DEBUG rename-shelf: shelf is orphan, cannot rename');
-        return { status: { text: `can't rename orphan shelf "${action.shelf}" — delete it to move its prompts to stash`, error: true } };
-      }
+      if (!exists) return { status: { text: `can't rename orphan shelf "${action.shelf}" — delete it to move its prompts to stash`, error: true } };
       const newName = await ctx.shelves.rename(action.shelf, action.newName);
-      console.error('DEBUG rename-shelf: renamed successfully', { old: action.shelf, new: newName });
       return { refresh: true, status: { text: t('cli.shelf.renamedMsg', { old: action.shelf, new: newName }) } };
     }
     case 'none':
