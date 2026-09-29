@@ -141,7 +141,8 @@ function debug(area, message, data) {
 }
 
 // src/storage/files.ts
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm, stat } from "fs/promises";
+import { fsyncSync } from "fs";
 import { randomUUID } from "crypto";
 import { dirname as dirname2 } from "path";
 var LOCK_RETRY_MS = 15;
@@ -150,11 +151,14 @@ var STALE_LOCK_MS = 1e4;
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function withFileLock(file2, fn) {
   const lock = `${file2}.lock`;
+  const lockToken = `${process.pid}-${randomUUID()}`;
   await mkdir(dirname2(file2), { recursive: true, mode: 448 });
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   for (; ; ) {
     try {
-      await (await open(lock, "wx")).close();
+      const handle = await open(lock, "wx");
+      await handle.writeFile(lockToken);
+      await handle.close();
       break;
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
@@ -169,13 +173,30 @@ async function withFileLock(file2, fn) {
   try {
     return await fn();
   } finally {
-    await rm(lock, { force: true });
+    try {
+      const content = await readTextIfExists(lock);
+      if (content === lockToken) await rm(lock, { force: true });
+    } catch {
+    }
   }
 }
 async function writeFileAtomic(file2, content) {
   await mkdir(dirname2(file2), { recursive: true, mode: 448 });
   const tmp = `${file2}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(tmp, content, "utf8");
+  const fd = await open(tmp, "w");
+  try {
+    await fd.writeFile(content, "utf8");
+    try {
+      fsyncSync(fd.fd);
+    } catch {
+    }
+  } finally {
+    await fd.close();
+  }
+  try {
+    await chmod(tmp, 384);
+  } catch {
+  }
   await rename(tmp, file2);
 }
 async function readTextIfExists(file2) {
@@ -215,8 +236,11 @@ import { appendFile } from "fs/promises";
 import { randomUUID as randomUUID2 } from "crypto";
 
 // src/domain/prompt.ts
-var isStashDraft = (p) => p.shelf === void 0;
-var onShelf = (name) => (p) => p.shelf?.toLowerCase() === name.toLowerCase();
+var isStashDraft = (p) => !p.shelfId && !p.shelf;
+var onShelf = (nameOrId) => (p) => {
+  if (p.shelfId === nameOrId) return true;
+  return p.shelf?.toLowerCase() === nameOrId.toLowerCase();
+};
 var SORT_ORDERS = ["newest", "most-used", "recent"];
 var nextSort = (order) => SORT_ORDERS[(SORT_ORDERS.indexOf(order) + 1) % SORT_ORDERS.length];
 function sortSaved(prompts, order) {
@@ -226,9 +250,14 @@ function sortSaved(prompts, order) {
 }
 
 // src/storage/prompt-store.ts
+var FILE_VERSION = 2;
+var isFileHeader = (value) => {
+  const v = value;
+  return typeof v === "object" && v !== null && typeof v.version === "number";
+};
 var isPrompt = (value) => {
   const v = value;
-  return typeof v === "object" && v !== null && ["id", "text", "agent", "cwd", "createdAt"].every((k) => typeof v[k] === "string") && (v.shelf === void 0 || typeof v.shelf === "string");
+  return typeof v === "object" && v !== null && ["id", "text", "agent", "cwd", "createdAt"].every((k) => typeof v[k] === "string") && (v.shelfId === void 0 || typeof v.shelfId === "string") && (v.shelf === void 0 || typeof v.shelf === "string");
 };
 var Store = class {
   constructor(filePath) {
@@ -240,7 +269,24 @@ var Store = class {
     const raw = await readTextIfExists(this.filePath) ?? "";
     const prompts = [];
     const unreadable = [];
-    for (const line of raw.split("\n")) {
+    let version2 = 1;
+    const lines = raw.split("\n");
+    let startIdx = 0;
+    if (lines.length > 0 && lines[0]) {
+      try {
+        const firstParsed = JSON.parse(lines[0]);
+        if (isFileHeader(firstParsed)) {
+          version2 = firstParsed.version;
+          if (version2 > FILE_VERSION) throw new UserError(`${this.filePath} is from a newer version (v${version2}); upgrade prompt-shelf`);
+          startIdx = 1;
+        }
+      } catch (err) {
+        if (!(err instanceof UserError)) startIdx = 0;
+        else throw err;
+      }
+    }
+    for (let i = startIdx; i < lines.length; i++) {
+      const line = lines[i];
       if (!line.trim()) continue;
       let parsed;
       try {
@@ -252,7 +298,7 @@ var Store = class {
       if (isPrompt(parsed)) prompts.push(parsed);
       else unreadable.push(line);
     }
-    return { prompts, unreadable };
+    return { prompts, unreadable, version: version2 };
   }
   /** Newest first. */
   async list() {
@@ -261,7 +307,17 @@ var Store = class {
   async add(input) {
     const { shelf, ...rest } = input;
     const prompt = { id: randomUUID2(), createdAt: (/* @__PURE__ */ new Date()).toISOString(), ...rest, ...shelf ? { shelf } : {} };
-    await withFileLock(this.filePath, () => appendFile(this.filePath, JSON.stringify(prompt) + "\n", "utf8"));
+    await withFileLock(this.filePath, async () => {
+      const raw = await readTextIfExists(this.filePath) ?? "";
+      if (!raw || !raw.includes('"version"') && raw.trim() === "") {
+        const { prompts, unreadable } = await this.read();
+        const header = JSON.stringify({ version: FILE_VERSION });
+        const lines = [header, ...unreadable, ...prompts.map((e) => JSON.stringify(e)), JSON.stringify(prompt)];
+        await writeFileAtomic(this.filePath, lines.join("\n") + "\n");
+      } else {
+        await appendFile(this.filePath, JSON.stringify(prompt) + "\n", "utf8");
+      }
+    });
     return prompt;
   }
   async remove(id) {
@@ -306,13 +362,17 @@ var Store = class {
       const { prompts, unreadable } = await this.read();
       const result = edit(prompts);
       if (result) {
-        const lines = [...unreadable, ...prompts.map((e) => JSON.stringify(e))];
+        const header = JSON.stringify({ version: FILE_VERSION });
+        const lines = [header, ...unreadable, ...prompts.map((e) => JSON.stringify(e))];
         await writeFileAtomic(this.filePath, lines.length ? lines.join("\n") + "\n" : "");
       }
       return result;
     });
   }
 };
+
+// src/storage/shelf-store.ts
+import { randomUUID as randomUUID3 } from "crypto";
 
 // src/domain/shelf.ts
 var RESERVED_SHELF_NAMES = ["stash", "skills"];
@@ -333,6 +393,7 @@ function withOrphans(shelves, prompts) {
 }
 
 // src/storage/shelf-store.ts
+var FILE_VERSION2 = 2;
 var Shelves = class {
   constructor(filePath) {
     this.filePath = filePath;
@@ -341,16 +402,28 @@ var Shelves = class {
   // A missing file means the defaults; a damaged one is an error, so a save can't silently wipe it.
   async read() {
     const raw = await readTextIfExists(this.filePath);
-    if (raw === null) return { shelves: [...DEFAULT_SHELVES], starred: [] };
+    if (raw === null) {
+      const defaults = DEFAULT_SHELVES.map((name) => ({ id: randomUUID3(), name }));
+      return { version: FILE_VERSION2, shelves: defaults, starred: [] };
+    }
     let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch {
       throw new UserError(`${this.filePath} is damaged; fix or delete it (your prompts are safe in the stash file)`);
     }
-    const names = (v) => Array.isArray(v) ? v.filter((n) => typeof n === "string") : [];
-    const shelves = names(parsed.shelves);
-    return { ...parsed, shelves, starred: names(parsed.starred).filter((n) => shelves.includes(n)) };
+    const version2 = typeof parsed.version === "number" ? parsed.version : 1;
+    if (version2 > FILE_VERSION2) throw new UserError(`${this.filePath} is from a newer version (v${version2}); upgrade prompt-shelf`);
+    let shelves;
+    if (version2 === 1 && Array.isArray(parsed.shelves) && typeof parsed.shelves[0] === "string") {
+      shelves = parsed.shelves.map((name) => ({ id: randomUUID3(), name }));
+    } else {
+      const isShelves = (v) => Array.isArray(v) && v.every((s) => typeof s === "object" && s !== null && typeof s.id === "string" && typeof s.name === "string");
+      shelves = isShelves(parsed.shelves) ? parsed.shelves : [];
+    }
+    const starred = (v) => Array.isArray(v) ? v.filter((id) => typeof id === "string") : [];
+    const starredIds = starred(parsed.starred).filter((id) => shelves.some((s) => s.id === id));
+    return { ...parsed, version: FILE_VERSION2, shelves, starred: starredIds };
   }
   // Read, change and save under a lock, so sessions and quick key presses never lose each other's changes.
   async change(edit) {
@@ -361,54 +434,68 @@ var Shelves = class {
       return result;
     });
   }
-  /** Shelves in display order: starred ones first, each group in the user's order. */
+  /** Shelf names in display order: starred ones first, each group in the user's order. */
   async list() {
     const { shelves, starred } = await this.read();
-    return [...shelves.filter((n) => starred.includes(n)), ...shelves.filter((n) => !starred.includes(n))];
+    return [
+      ...shelves.filter((s) => starred.includes(s.id)).map((s) => s.name),
+      ...shelves.filter((s) => !starred.includes(s.id)).map((s) => s.name)
+    ];
   }
+  /** Shelf names that are starred. */
   async starred() {
-    return (await this.read()).starred;
+    const { shelves, starred: starredIds } = await this.read();
+    return starredIds.map((id) => shelves.find((s) => s.id === id)?.name).filter((n) => n !== void 0);
+  }
+  /** The shelf object with matching name (case-insensitive). */
+  findByName(shelves, name) {
+    const target = name.toLowerCase();
+    return shelves.find((s) => s.name.toLowerCase() === target);
   }
   /** The stored spelling of a shelf name, matched case-insensitively. */
   async find(name) {
-    return findShelf((await this.read()).shelves, name);
+    const shelf = this.findByName((await this.read()).shelves, name);
+    return shelf?.name;
+  }
+  /** The shelf ID with matching name (case-insensitive), or undefined if not found. */
+  async findId(name) {
+    const shelf = this.findByName((await this.read()).shelves, name);
+    return shelf?.id;
   }
   /** Adds a shelf and returns its name; an existing shelf with that name is returned as is. */
   async create(name) {
     const clean = validName(name);
     return this.change((file2) => {
-      const existing = findShelf(file2.shelves, clean);
-      if (existing) return existing;
-      file2.shelves.push(clean);
+      const existing = this.findByName(file2.shelves, clean);
+      if (existing) return existing.name;
+      file2.shelves.push({ id: randomUUID3(), name: clean });
       return clean;
     });
   }
   async rename(from, to) {
     const clean = validName(to);
     return this.change((file2) => {
-      const current = requireIn(file2.shelves, from);
-      const clash = findShelf(file2.shelves, clean);
-      if (clash && clash !== current) throw new UserError(`a shelf named "${clash}" already exists`);
-      const swap = (n) => n === current ? clean : n;
-      file2.shelves = file2.shelves.map(swap);
-      file2.starred = file2.starred.map(swap);
+      const current = this.requireByName(file2.shelves, from);
+      const clash = this.findByName(file2.shelves, clean);
+      if (clash && clash.id !== current.id) throw new UserError(`a shelf named "${clash.name}" already exists`);
+      current.name = clean;
       return clean;
     });
   }
   async remove(name) {
     await this.change((file2) => {
-      const current = requireIn(file2.shelves, name);
-      file2.shelves = file2.shelves.filter((n) => n !== current);
-      file2.starred = file2.starred.filter((n) => n !== current);
+      const current = this.requireByName(file2.shelves, name);
+      file2.shelves = file2.shelves.filter((s) => s.id !== current.id);
+      file2.starred = file2.starred.filter((id) => id !== current.id);
     });
   }
   /** Stars or unstars a shelf; returns whether it is starred now. */
   async toggleStar(name) {
     return this.change((file2) => {
-      const current = requireIn(file2.shelves, name);
-      const starred = !file2.starred.includes(current);
-      file2.starred = starred ? [...file2.starred, current] : file2.starred.filter((n) => n !== current);
-      return starred;
+      const current = this.requireByName(file2.shelves, name);
+      const isStarred = file2.starred.includes(current.id);
+      file2.starred = isStarred ? file2.starred.filter((id) => id !== current.id) : [...file2.starred, current.id];
+      return !isStarred;
     });
   }
   /**
@@ -417,22 +504,24 @@ var Shelves = class {
    */
   async move(name, step) {
     return this.change((file2) => {
-      const current = requireIn(file2.shelves, name);
-      const group = file2.shelves.filter((n) => file2.starred.includes(n) === file2.starred.includes(current));
-      const neighbour = group[group.indexOf(current) + step];
-      if (!neighbour) return false;
+      const current = this.requireByName(file2.shelves, name);
+      const isStarred = file2.starred.includes(current.id);
+      const group = file2.shelves.filter((s) => file2.starred.includes(s.id) === isStarred);
+      const neighbourIdx = group.indexOf(current) + step;
+      if (neighbourIdx < 0 || neighbourIdx >= group.length) return false;
+      const neighbour = group[neighbourIdx];
       const a = file2.shelves.indexOf(current);
       const b = file2.shelves.indexOf(neighbour);
       [file2.shelves[a], file2.shelves[b]] = [file2.shelves[b], file2.shelves[a]];
       return true;
     });
   }
+  requireByName(shelves, name) {
+    const found = this.findByName(shelves, name);
+    if (!found) throw new UserError(`no shelf named "${name}"`);
+    return found;
+  }
 };
-function requireIn(shelves, name) {
-  const found = findShelf(shelves, name);
-  if (!found) throw new UserError(`no shelf named "${name}"`);
-  return found;
-}
 
 // src/system/passthrough.ts
 import { spawn } from "child_process";
@@ -841,6 +930,151 @@ async function recordScreen(screen, dir, agent) {
   return `${base}.txt`;
 }
 
+// src/i18n/en.ts
+var en = {
+  // Session actions and effects
+  "save.nothing": "nothing to stash",
+  "save.collapsedPaste": "draft contains a collapsed paste \u2014 expand it first",
+  "save.stashed": "stashed ({count})",
+  "save.savedTo": "saved to {shelf}",
+  "actions.poppedLeft": "popped \xB7 {left} left",
+  "actions.appendedLeft": "appended \xB7 {left} left",
+  "actions.keptStash": "used \xB7 kept in stash",
+  "actions.appendedKeptStash": "appended \xB7 kept in stash",
+  "actions.keptShelf": "used \xB7 kept on {shelf}",
+  "actions.appendedShelf": "appended \xB7 kept on {shelf}",
+  "actions.skillInserted": "skill: {name}",
+  "actions.deleted": "deleted",
+  "actions.changedOtherSession": "that prompt was changed in another session",
+  "actions.shelfReady": "shelf {name} is ready",
+  "actions.alreadyFirst": "already first",
+  "actions.alreadyLast": "already last",
+  "actions.starredShelf": "starred {shelf}",
+  "actions.unstarredShelf": "unstarred {shelf}",
+  // List panel
+  "list.noSkillsFor": "no skills found for {agent} here",
+  "list.emptyShelf": "{name} is empty \u2014 on the stash tab press s on a draft to save it here",
+  "list.emptyStashTab": "nothing stashed here \u2014 tab to see all ({count})",
+  "list.emptyStash": "nothing stashed \u2014 type in the agent's box and press {hotkey}",
+  "list.deletePrompt": "delete this prompt?",
+  "list.deleteYes": "yes",
+  "list.deleteNo": "no",
+  "list.filterDone": "enter done \xB7 esc clear",
+  "list.newShelfHint": "enter create \xB7 esc cancel",
+  "list.pickShelfHint": "\u2190\u2192 choose \xB7 enter save \xB7 n new shelf \xB7 esc cancel",
+  "list.saveToShelf": "save to shelf:",
+  "list.noMatches": "no matches for /{query}",
+  "list.skillsTip": "what {agent} can use in this folder \xB7 enter names one in the box",
+  "list.savedPromptsTip": "saved prompts \xB7 they stay here when you use them \xB7 {sort}",
+  "list.draftsTip": "drafts you parked {where} \xB7 used once, then gone",
+  "list.draftsCross": "from every repo ({count})",
+  "list.draftsThisRepo": "in this repo ({shown} of {total})",
+  "list.filterIndicator": "/{query}",
+  "list.stashTab": "Stash",
+  "list.skillsTab": "Skills",
+  "list.newShelfButton": "+ new",
+  "list.switchLists": "\u2190\u2192 switch list",
+  "list.key.navUp": "\u2191  \u2193  j  k",
+  "list.key.moveUp": "move",
+  "list.key.switchTab": "\u2190  \u2192",
+  "list.key.switchList": "switch list",
+  "list.key.enter": "enter",
+  "list.key.useSkill": "put the skill in the box, the way {agent} runs skills",
+  "list.key.search": "search skills",
+  "list.key.moreKeys": "more keys",
+  "list.key.closeList": "close the list",
+  "list.key.usePrompt": "use",
+  "list.key.putDraft": "put the draft in the box (it leaves the stash)",
+  "list.key.keepDraft": "put the draft in the box and keep it",
+  "list.key.usePromptKeep": "put the prompt in the box (it stays on the shelf)",
+  "list.key.saveDraft": "save to a shelf",
+  "list.key.movePrompt": "move to another shelf",
+  "list.key.newShelf": "new shelf",
+  "list.key.sortNext": "sort: {next} next",
+  "list.key.starShelf": "{action} this shelf (starred come first)",
+  "list.key.moveShelfLR": "move this list left / right",
+  "list.key.scopeToggle": "{change}",
+  "list.key.scopeToAll": "this repo \u2192 all repos",
+  "list.key.scopeToRepo": "all repos \u2192 this repo",
+  "list.key.delete": "delete",
+  "list.key.filter": "search this list",
+  "list.key.esc": "close the list",
+  "list.sortLabel_newest": "newest first",
+  "list.sortLabel_mostUsed": "most used",
+  "list.sortLabel_recent": "recently used",
+  "list.sortNext_newest": "most used",
+  "list.sortNext_mostUsed": "recent",
+  "list.sortNext_recent": "newest",
+  // Save picker
+  "picker.newShelfHint": "enter create \xB7 esc cancel",
+  "picker.pickShelfHint": "\u2190\u2192 choose \xB7 enter save \xB7 n new shelf \xB7 esc cancel",
+  "picker.saveToShelf": "save to shelf:",
+  // CLI commands
+  "cli.prompt.noPromptError": "no prompt {ref} (have {count})",
+  "cli.shelf.notFoundError": 'no shelf named "{name}" \u2014 stash shelves lists them',
+  "cli.shelf.usageError": "usage: stash shelf {action} <name>{rename}",
+  "cli.shelf.usageRenameError": "usage: stash shelf rename <old> <new>",
+  "cli.shelf.readyMsg": "shelf {name} is ready",
+  "cli.shelf.starredMsg": "starred {name}",
+  "cli.shelf.unstarredMsg": "unstarred {name}",
+  "cli.shelf.renamedMsg": "renamed {old} to {new}",
+  "cli.shelf.deleteForce": "shelf {name} has {count}; add --force to delete them too",
+  "cli.shelf.deletedMsg": "deleted shelf {name}{count}",
+  "cli.shelf.deletedWithPrompts": " and its {count}",
+  "cli.shelf.moreInOtherRepos": "{count} more in other repos \u2014 stash list --all",
+  "cli.shelf.removed": "removed: [{location}] {text}",
+  "cli.shelf.removedShelfFormat": "shelf {shelf}",
+  "cli.shelf.removedAgentFormat": "{agent} \xB7 {path}",
+  "cli.shelf.pluralPrompts_one": "1 prompt",
+  "cli.shelf.pluralPrompts_other": "{count} prompts",
+  // Setup commands
+  "cli.setup.hotkeyMsg": "hotkey: {hotkey}",
+  "cli.setup.listHotkeyMsg": "list hotkey: {hotkey}",
+  "cli.setup.bothHotkeysMsg": "hotkey: {hotkey}\nlist hotkey: {listHotkey}",
+  "cli.setup.hotkeyReservedError": "{label} is reserved by {owners}; pick another",
+  "cli.setup.hotkeyConflictError": "{label} is already the {which} hotkey; pick another",
+  "cli.setup.hotkeySetMsg": "{which} set to {label} \u2014 takes effect in new sessions",
+  "cli.setup.hotkeySetStash": "hotkey",
+  "cli.setup.hotkeySetList": "list hotkey",
+  "cli.setup.doctorVersion": "prompt-shelf {version} \xB7 node {nodeVersion} \xB7 {platform}",
+  "cli.setup.doctorData": "data: {dir}",
+  "cli.setup.doctorDebugOff": "debug log: off (PROMPT_SHELF_DEBUG=1 turns it on)",
+  "cli.setup.doctorDebugOn": "debug log: {file}",
+  "cli.setup.doctorShimDir": "shim dir: {dir}",
+  "cli.setup.doctorOnPath_yes": "on PATH: yes",
+  "cli.setup.doctorOnPath_no": "on PATH: no",
+  "cli.setup.doctorShimStatus": "{command}: shim {status}, real binary {binary}",
+  "cli.setup.doctorShimInstalled": "installed",
+  "cli.setup.doctorShimMissing": "missing",
+  "cli.setup.doctorBinaryNotFound": "not found",
+  "cli.setup.doctorPathFix": "fix: {hint}",
+  // Error formatting
+  "error.prefix": "error: {message}"
+};
+
+// src/i18n/index.ts
+var LOCALES = { en };
+function detectLocale(env = process.env, supported = Object.keys(LOCALES)) {
+  for (const value of [env.PROMPT_SHELF_LANG, env.LC_ALL, env.LC_MESSAGES, env.LANG]) {
+    if (!value || value === "C" || value === "POSIX") continue;
+    const tag = value.split(".")[0].replace("_", "-").toLowerCase();
+    for (const candidate of [tag, tag.split("-")[0]]) if (supported.includes(candidate)) return candidate;
+  }
+  return "en";
+}
+var locale = detectLocale();
+var messages = LOCALES[locale];
+var fill = (text, params) => text.replace(/\{(\w+)\}/g, (whole, name) => name in params ? String(params[name]) : whole);
+function t(key, params = {}) {
+  return fill(messages[key] ?? en[key], params);
+}
+function tn(key, count, params = {}) {
+  const form = new Intl.PluralRules(locale).select(count);
+  const all = messages;
+  const text = all[`${key}_${form}`] ?? all[`${key}_other`] ?? en[`${key}_other`];
+  return fill(text, { count, ...params });
+}
+
 // src/terminal/inject.ts
 var yieldTick = () => new Promise((r) => setTimeout(r, 0));
 async function injectPaste(target, text, chunkSize = 512) {
@@ -1063,7 +1297,14 @@ var shelfLabel = (name, starred) => starred.includes(name) ? `\u2605 ${name}` : 
 var styleStar = (label) => label.replace(/^★/, `${theme.star}\u2605${ansi.reset}`);
 
 // src/ui/list-panel.ts
-var SORT_LABEL = { newest: "newest first", "most-used": "most used", recent: "recently used" };
+var SORT_LABEL = (order) => {
+  const labels = {
+    newest: t("list.sortLabel_newest"),
+    "most-used": t("list.sortLabel_mostUsed"),
+    recent: t("list.sortLabel_recent")
+  };
+  return labels[order];
+};
 var sameTab = (a, b) => a.kind === b.kind && (a.kind !== "shelf" || b.kind === "shelf" && a.name === b.name);
 var rowText = (row) => row.kind === "skill" ? `${row.skill.name} ${row.skill.description}` : row.prompt.text;
 var usageTag = (p) => p.usedCount ? `used ${p.usedCount}\xD7 \xB7 ${ago(p.lastUsedAt)}` : `saved ${ago(p.createdAt)}`;
@@ -1096,7 +1337,7 @@ var ListPanel = class {
     this.hotkeyLabel = options.hotkeyLabel;
     this.currentScope = options.scope ?? "repo";
     this.sortOrder = options.sort ?? "newest";
-    const start = options.tab ? this.tabs().findIndex((t) => sameTab(t, options.tab)) : 0;
+    const start = options.tab ? this.tabs().findIndex((t2) => sameTab(t2, options.tab)) : 0;
     this.tabIndex = Math.max(0, start);
   }
   tabs() {
@@ -1117,12 +1358,12 @@ var ListPanel = class {
     this.prompts = prompts;
     this.shelves = shelves;
     this.starredShelves = starredShelves;
-    this.tabIndex = Math.max(0, this.tabs().findIndex((t) => sameTab(t, tab)));
+    this.tabIndex = Math.max(0, this.tabs().findIndex((t2) => sameTab(t2, tab)));
     this.clampIndex();
   }
   /** Opens a shelf's tab, e.g. right after creating it. */
   showShelf(name) {
-    const i = this.tabs().findIndex((t) => t.kind === "shelf" && t.name === name);
+    const i = this.tabs().findIndex((t2) => t2.kind === "shelf" && t2.name === name);
     if (i >= 0) this.goToTab(i);
   }
   drafts() {
@@ -1260,50 +1501,52 @@ var ListPanel = class {
   footer(cols) {
     switch (this.mode) {
       case "confirm-delete":
-        return ` ${ansi.bold}${theme.error}delete this prompt?${ansi.reset}  ${keyHints([["y", "yes"], ["n", "no"]])}`;
+        return ` ${ansi.bold}${theme.error}${t("list.deletePrompt")}${ansi.reset}  ${keyHints([["y", t("list.deleteYes")], ["n", t("list.deleteNo")]])}`;
       case "help":
         return keyHints([["any key", "back"]]);
       case "filter":
-        return ` ${ansi.bold}/ ${this.filterText}\u258F${ansi.reset}${ansi.dim}   enter done \xB7 esc clear${ansi.reset}`;
+        return ` ${ansi.bold}/ ${this.filterText}\u258F${ansi.reset}${ansi.dim}   ${t("list.filterDone")}${ansi.reset}`;
       case "new-shelf":
-        return this.nameInput.render("new shelf name:", "enter create \xB7 esc cancel");
+        return this.nameInput.render("new shelf name:", t("list.newShelfHint"));
       case "pick-shelf": {
-        const hint = "   \u2190\u2192 choose \xB7 enter save \xB7 n new shelf \xB7 esc cancel";
-        const label = " save to shelf:";
+        const hint = `   ${t("list.pickShelfHint")}`;
+        const label = ` ${t("list.saveToShelf")}`;
         const row = choiceRow(this.saveTargets(), this.target, Math.max(10, cols - label.length - hint.length));
         return `${ansi.bold}${label}${ansi.reset}${row}${ansi.dim}${hint}${ansi.reset}`;
       }
     }
-    if (this.tab.kind === "skills") return keyHints([["enter", "use this skill"], ["/", "search"], ["?", "more keys"], ["esc", "close"]]);
-    const save = this.tab.kind === "shelf" ? ["s", "move"] : ["s", "save to a shelf"];
-    return keyHints([["enter", "use"], save, ["/", "search"], ["?", "more keys"], ["esc", "close"]]);
+    if (this.tab.kind === "skills") return keyHints([["enter", t("list.key.useSkill", { agent: this.agent })], ["/", t("list.key.search")], ["?", t("list.key.moreKeys")], ["esc", t("list.key.closeList")]]);
+    const save = this.tab.kind === "shelf" ? ["s", t("list.key.movePrompt")] : ["s", t("list.key.saveDraft")];
+    return keyHints([["enter", t("list.key.usePrompt")], save, ["/", t("list.key.filter")], ["?", t("list.key.moreKeys")], ["esc", t("list.key.esc")]]);
   }
   helpLines() {
     const tab = this.tab;
     const shelf = tab.kind === "shelf";
     const both = [
-      ["\u2190  \u2192", "switch list"],
-      ["\u2191  \u2193  j  k", "move"]
+      [t("list.key.switchTab"), t("list.key.switchList")],
+      [t("list.key.navUp"), t("list.key.moveUp")]
     ];
     let rows;
     if (tab.kind === "skills") {
-      rows = [...both, ["enter", `put the skill in the box, the way ${this.agent} runs skills`], ["/", "search skills"], ["esc", "close the list"]];
+      rows = [...both, ["enter", t("list.key.useSkill", { agent: this.agent })], ["/", t("list.key.search")], ["esc", t("list.key.closeList")]];
     } else {
-      const star = shelf && this.starredShelves.includes(tab.name) ? "unstar this shelf" : "star this shelf (starred come first)";
+      const starAction = shelf && this.starredShelves.includes(tab.name) ? "unstar" : "star";
+      const star = t("list.key.starShelf", { action: starAction });
+      const scopeChange = this.currentScope === "repo" ? t("list.key.scopeToAll") : t("list.key.scopeToRepo");
       rows = [
         ...both,
-        ["enter", shelf ? "put the prompt in the box (it stays on the shelf)" : "put the draft in the box (it leaves the stash)"],
-        ...shelf ? [] : [["a", "put the draft in the box and keep it"]],
-        ["s", shelf ? "move the prompt to another shelf" : "save the draft to a shelf"],
-        ["n", "new shelf"],
+        ["enter", shelf ? t("list.key.usePromptKeep") : t("list.key.putDraft")],
+        ...shelf ? [] : [["a", t("list.key.keepDraft")]],
+        ["s", shelf ? t("list.key.movePrompt") : t("list.key.saveDraft")],
+        ["n", t("list.key.newShelf")],
         ...shelf ? [
-          ["o", `sort: ${SORT_LABEL[nextSort(this.sortOrder)]} next`],
+          ["o", t("list.key.sortNext", { next: SORT_LABEL(nextSort(this.sortOrder)) })],
           ["*", star],
-          ["<  >", "move this list left / right"]
-        ] : [["tab", this.currentScope === "repo" ? "this repo \u2192 all repos" : "all repos \u2192 this repo"]],
-        ["d", "delete"],
-        ["/", "search this list"],
-        ["esc", "close the list"]
+          ["<  >", t("list.key.moveShelfLR")]
+        ] : [["tab", t("list.key.scopeToggle", { change: scopeChange })]],
+        ["d", t("list.key.delete")],
+        ["/", t("list.key.filter")],
+        ["esc", t("list.key.esc")]
       ];
     }
     const half = Math.ceil(rows.length / 2);
@@ -1317,10 +1560,10 @@ var ListPanel = class {
   emptyMessage() {
     const tab = this.tab;
     if (this.tabRows(tab).length) return null;
-    if (tab.kind === "skills") return `no skills found for ${this.agent} here`;
-    if (tab.kind === "shelf") return `${tab.name} is empty \u2014 on the stash tab press s on a draft to save it here`;
+    if (tab.kind === "skills") return t("list.noSkillsFor", { agent: this.agent });
+    if (tab.kind === "shelf") return t("list.emptyShelf", { name: tab.name });
     const drafts = this.drafts().length;
-    return drafts ? `nothing stashed here \u2014 tab to see all (${drafts})` : `nothing stashed \u2014 type in the agent's box and press ${this.hotkeyLabel}`;
+    return drafts ? t("list.emptyStashTab", { count: drafts }) : t("list.emptyStash", { hotkey: this.hotkeyLabel });
   }
   tabName(tab) {
     if (tab.kind === "stash") return "Stash";
@@ -1330,8 +1573,8 @@ var ListPanel = class {
   // The lists as tabs, then "+ new (n)", with "←→ switch list" on the right when there's room.
   tabBar(cols) {
     const addNew = addNewHint();
-    const hint = "\u2190\u2192 switch list";
-    const labels = this.tabs().map((t) => `${this.tabName(t)} ${this.tabRows(t).length}`);
+    const hint = t("list.switchLists");
+    const labels = this.tabs().map((t2) => `${this.tabName(t2)} ${this.tabRows(t2).length}`);
     const style = (l) => styleStar(l).replace(/ (\d+)$/, ` ${ansi.dim}$1${ansi.reset}`);
     const row = choiceRow(labels, this.tabIndex, cols - visibleWidth(addNew) - hint.length - 2, style) + addNew;
     const gap = cols - visibleWidth(row) - hint.length - 1;
@@ -1341,14 +1584,14 @@ var ListPanel = class {
   infoLine(cols, shown) {
     const tab = this.tab;
     let about;
-    if (tab.kind === "skills") about = `what ${this.agent} can use in this folder \xB7 enter names one in the box`;
-    else if (tab.kind === "shelf") about = `saved prompts \xB7 they stay here when you use them \xB7 ${SORT_LABEL[this.sortOrder]}`;
+    if (tab.kind === "skills") about = t("list.skillsTip", { agent: this.agent });
+    else if (tab.kind === "shelf") about = t("list.savedPromptsTip", { sort: SORT_LABEL(this.sortOrder) });
     else {
       const drafts = this.drafts().length;
-      const where = this.currentScope === "all" ? `from every repo (${drafts})` : `in this repo (${this.tabRows(tab).length} of ${drafts})`;
-      about = `drafts you parked ${where} \xB7 used once, then gone`;
+      const where = this.currentScope === "all" ? t("list.draftsCross", { count: drafts }) : t("list.draftsThisRepo", { shown: this.tabRows(tab).length, total: drafts });
+      about = t("list.draftsTip", { where });
     }
-    if (this.filterText) about += ` \xB7 /${this.filterText}`;
+    if (this.filterText) about += ` \xB7 ${t("list.filterIndicator", { query: this.filterText })}`;
     const title = tab.kind === "shelf" ? tab.name : this.tabName(tab);
     const position = shown && this.mode !== "help" ? `${this.index + 1}/${shown}` : "";
     const gap = Math.max(1, cols - 4 - visibleWidth(title) - visibleWidth(about) - position.length);
@@ -1484,7 +1727,7 @@ async function panelData(ctx) {
   const prompts = await ctx.store.list();
   return { prompts, shelves: withOrphans(await ctx.shelves.list(), prompts), starred: await ctx.shelves.starred() };
 }
-var gone = { refresh: true, status: { text: "that prompt was changed in another session", error: true } };
+var gone = { refresh: true, status: { text: t("actions.changedOtherSession"), error: true } };
 var draftsLeft = async (ctx) => (await ctx.store.list()).filter(isStashDraft).length;
 async function listEffect(ctx, action, hasDraft) {
   switch (action.type) {
@@ -1493,36 +1736,39 @@ async function listEffect(ctx, action, hasDraft) {
     case "pop": {
       if (!await ctx.store.remove(action.prompt.id)) return gone;
       const left = await draftsLeft(ctx);
-      return { close: true, insert: action.prompt.text, status: { text: `${hasDraft ? "appended" : "popped"} \xB7 ${left} left` } };
+      const key = hasDraft ? "actions.appendedLeft" : "actions.poppedLeft";
+      return { close: true, insert: action.prompt.text, status: { text: t(key, { left }) } };
     }
     case "use": {
       if (!await ctx.store.markUsed(action.prompt.id)) return gone;
-      const kept = action.prompt.shelf ? `kept on ${action.prompt.shelf}` : "kept in stash";
-      return { close: true, insert: action.prompt.text, status: { text: `${hasDraft ? "appended" : "used"} \xB7 ${kept}` } };
+      const key = action.prompt.shelf ? hasDraft ? "actions.appendedShelf" : "actions.keptShelf" : hasDraft ? "actions.appendedKeptStash" : "actions.keptStash";
+      const params = action.prompt.shelf ? { shelf: action.prompt.shelf } : {};
+      return { close: true, insert: action.prompt.text, status: { text: t(key, params) } };
     }
     case "use-skill":
-      return { close: true, insert: ctx.skillPrompt(action.name, hasDraft), status: { text: `skill: ${action.name}` } };
+      return { close: true, insert: ctx.skillPrompt(action.name, hasDraft), status: { text: t("actions.skillInserted", { name: action.name }) } };
     case "delete":
-      return await ctx.store.remove(action.prompt.id) ? { refresh: true, status: { text: "deleted" } } : gone;
+      return await ctx.store.remove(action.prompt.id) ? { refresh: true, status: { text: t("actions.deleted") } } : gone;
     case "save-to-shelf": {
       const shelf = await ctx.shelves.create(action.shelf);
       if (!await ctx.store.setShelf(action.prompt.id, shelf)) return gone;
-      return { refresh: true, status: { text: `saved to ${shelf}` } };
+      return { refresh: true, status: { text: t("save.savedTo", { shelf }) } };
     }
     case "create-shelf": {
       const shelf = await ctx.shelves.create(action.name);
-      if (!action.prompt) return { refresh: true, showShelf: shelf, status: { text: `shelf ${shelf} is ready` } };
+      if (!action.prompt) return { refresh: true, showShelf: shelf, status: { text: t("actions.shelfReady", { name: shelf }) } };
       if (!await ctx.store.setShelf(action.prompt.id, shelf)) return gone;
-      return { refresh: true, status: { text: `saved to ${shelf}` } };
+      return { refresh: true, status: { text: t("save.savedTo", { shelf }) } };
     }
     case "star-shelf": {
       const shelf = await ctx.shelves.create(action.shelf);
       const starred = await ctx.shelves.toggleStar(shelf);
-      return { refresh: true, status: { text: `${starred ? "starred" : "unstarred"} ${shelf}` } };
+      const key = starred ? "actions.starredShelf" : "actions.unstarredShelf";
+      return { refresh: true, status: { text: t(key, { shelf }) } };
     }
     case "move-shelf": {
       const moved = await ctx.shelves.move(await ctx.shelves.create(action.shelf), action.step);
-      return moved ? { refresh: true } : { status: { text: action.step < 0 ? "already first" : "already last" } };
+      return moved ? { refresh: true } : { status: { text: t(action.step < 0 ? "actions.alreadyFirst" : "actions.alreadyLast") } };
     }
     case "none":
       return {};
@@ -1533,7 +1779,9 @@ async function pickerEffect(ctx, action, text) {
   if (action.type === "cancel") return { close: true };
   const shelf = action.type === "create-shelf" ? await ctx.shelves.create(action.name) : action.shelf && await ctx.shelves.create(action.shelf);
   await ctx.store.add({ text, agent: ctx.agent, cwd: ctx.cwd, ...shelf ? { shelf } : {} });
-  return { close: true, clearDraft: true, status: { text: shelf ? `saved to ${shelf}` : `stashed (${await draftsLeft(ctx)})` } };
+  const count = await draftsLeft(ctx);
+  const statusText = shelf ? t("save.savedTo", { shelf }) : t("save.stashed", { count });
+  return { close: true, clearDraft: true, status: { text: statusText } };
 }
 
 // src/session/session.ts
@@ -1651,10 +1899,10 @@ var Session = class {
   async openPicker() {
     const { adapter, ctx, display } = this.deps;
     const draft = await this.readDraft();
-    if (!draft) return display.toast({ text: "nothing to stash" });
+    if (!draft) return display.toast({ text: t("save.nothing") });
     const text = this.tracker ? this.tracker.expand(draft.text) : draft.text;
     if (text === null) debug("paste", "a collapsed paste could not be matched", { waiting: this.tracker?.waiting });
-    if (text === null || adapter.unsafeDraft.test(text)) return display.toast({ text: "draft contains a collapsed paste \u2014 expand it first", error: true });
+    if (text === null || adapter.unsafeDraft.test(text)) return display.toast({ text: t("save.collapsedPaste"), error: true });
     const data = await panelData(ctx);
     this.picker = { ui: new SavePicker(text, data.shelves, data.starred), draft, text };
     display.show(this.picker.ui, PICKER_ROWS);
@@ -1878,7 +2126,10 @@ Config: ~/.prompt-shelf/config.json  ${JSON.stringify(DEFAULT_CONFIG).replace(/,
 // src/cli/prompt-commands.ts
 import { basename as basename2 } from "path";
 var REMOVED_PREVIEW = 60;
-var describeRemoved = (p) => `removed: [${p.shelf ? `shelf ${p.shelf}` : `${p.agent} \xB7 ${basename2(p.cwd)}`}] ${clip(flatten(p.text), REMOVED_PREVIEW)}`;
+var describeRemoved = (p) => {
+  const location = p.shelf ? t("cli.shelf.removedShelfFormat", { shelf: p.shelf }) : t("cli.shelf.removedAgentFormat", { agent: p.agent, path: basename2(p.cwd) });
+  return t("cli.shelf.removed", { location, text: clip(flatten(p.text), REMOVED_PREVIEW) });
+};
 var formatPrompt = (p, i) => {
   const text = flatten(p.text);
   if (p.shelf === void 0) return `${i + 1}. [${p.agent} \xB7 ${p.cwd}] ${text}`;
@@ -1895,14 +2146,14 @@ function listLines(prompts, scope) {
   const lines = shown.map(formatPrompt);
   if (!scope.shelf) {
     const hidden = prompts.filter(isStashDraft).length - shown.length;
-    if (hidden > 0) lines.push(`${hidden} more in other repos \u2014 stash list --all`);
+    if (hidden > 0) lines.push(t("cli.shelf.moreInOtherRepos", { count: hidden }));
   }
   return lines;
 }
 function resolveRef(prompts, ref, scope) {
   const shown = viewPrompts(prompts, scope);
   const n = Number.parseInt(ref ?? "1", 10);
-  if (!Number.isInteger(n) || n < 1 || n > shown.length) throw new UserError(`no prompt ${ref ?? "1"} (have ${shown.length})`);
+  if (!Number.isInteger(n) || n < 1 || n > shown.length) throw new UserError(t("cli.prompt.noPromptError", { ref: ref ?? "1", count: shown.length }));
   return shown[n - 1];
 }
 
@@ -1911,42 +2162,47 @@ import { existsSync as existsSync2 } from "fs";
 import { join as join5 } from "path";
 async function runHotkeyCommand(spec, filePath = configFile, list = false) {
   const config = await loadConfig(filePath);
-  if (spec === void 0) return list ? `list hotkey: ${config.listHotkey}` : `hotkey: ${config.hotkey}
-list hotkey: ${config.listHotkey}`;
+  if (spec === void 0) {
+    return list ? t("cli.setup.listHotkeyMsg", { hotkey: config.listHotkey }) : t("cli.setup.bothHotkeysMsg", { hotkey: config.hotkey, listHotkey: config.listHotkey });
+  }
   const { label } = parseHotkey(spec);
   const owners = reservedBy(label);
-  if (owners.length) throw new UserError(`${label} is reserved by ${owners.join(", ")}; pick another`);
+  if (owners.length) throw new UserError(t("cli.setup.hotkeyReservedError", { label, owners: owners.join(", ") }));
   const other = list ? config.hotkey : config.listHotkey;
-  if (label === other) throw new UserError(`${label} is already the ${list ? "stash" : "list"} hotkey; pick another`);
+  const which = list ? "stash" : "list";
+  if (label === other) throw new UserError(t("cli.setup.hotkeyConflictError", { label, which }));
   await saveConfig(list ? { listHotkey: label } : { hotkey: label }, filePath);
-  return `${list ? "list hotkey" : "hotkey"} set to ${label} \u2014 takes effect in new sessions`;
+  const whichLabel = list ? t("cli.setup.hotkeySetList") : t("cli.setup.hotkeySetStash");
+  return t("cli.setup.hotkeySetMsg", { which: whichLabel, label });
 }
 function doctorLines(version2) {
   const onPath = shimDirOnPath();
   const debugLog = debugLogFile();
   const lines = [
-    `prompt-shelf ${version2} \xB7 node ${process.version} \xB7 ${process.platform}`,
-    `data: ${stashDir}`,
-    `debug log: ${debugLog ?? "off (PROMPT_SHELF_DEBUG=1 turns it on)"}`,
-    `shim dir: ${shimDir}`,
-    `on PATH: ${onPath ? "yes" : "no"}`
+    t("cli.setup.doctorVersion", { version: version2, nodeVersion: process.version, platform: process.platform }),
+    t("cli.setup.doctorData", { dir: stashDir }),
+    debugLog ? t("cli.setup.doctorDebugOn", { file: debugLog }) : t("cli.setup.doctorDebugOff"),
+    t("cli.setup.doctorShimDir", { dir: shimDir }),
+    onPath ? t("cli.setup.doctorOnPath_yes") : t("cli.setup.doctorOnPath_no")
   ];
   for (const { command } of allAdapters()) {
     const shimmed = existsSync2(join5(shimDir, command)) || existsSync2(join5(shimDir, `${command}.cmd`));
-    lines.push(`${command}: shim ${shimmed ? "installed" : "missing"}, real binary ${findRealBinary(command) ?? "not found"}`);
+    const status = shimmed ? t("cli.setup.doctorShimInstalled") : t("cli.setup.doctorShimMissing");
+    const binary = findRealBinary(command) ?? t("cli.setup.doctorBinaryNotFound");
+    lines.push(t("cli.setup.doctorShimStatus", { command, status, binary }));
   }
-  if (!onPath) lines.push(`fix: ${pathHint()}`);
+  if (!onPath) lines.push(t("cli.setup.doctorPathFix", { hint: pathHint() }));
   return lines;
 }
 
 // src/cli/shelf-commands.ts
-var plural = (n) => `${n} prompt${n === 1 ? "" : "s"}`;
+var plural = (n) => tn("cli.shelf.pluralPrompts", n, { count: n });
 async function requireShelf(shelves, store, name) {
   const saved = await shelves.find(name);
   if (saved) return { name: saved, saved: true };
   const orphan = findShelf(withOrphans([], await store.list()), name);
   if (orphan) return { name: orphan, saved: false };
-  throw new UserError(`no shelf named "${name}" \u2014 stash shelves lists them`);
+  throw new UserError(t("cli.shelf.notFoundError", { name }));
 }
 async function shelfLines(shelves, store) {
   const prompts = await store.list();
@@ -1955,24 +2211,27 @@ async function shelfLines(shelves, store) {
 }
 async function runShelfCommand(cmd, shelves, store) {
   const [first, second] = cmd.names;
-  if (!first) throw new UserError(`usage: stash shelf ${cmd.action} <name>${cmd.action === "rename" ? " <new name>" : ""}`, 2);
-  if (cmd.action === "new") return `shelf ${await shelves.create(first)} is ready`;
+  const rename2 = cmd.action === "rename" ? " <new name>" : "";
+  if (!first) throw new UserError(t("cli.shelf.usageError", { action: cmd.action, rename: rename2 }), 2);
+  if (cmd.action === "new") return t("cli.shelf.readyMsg", { name: await shelves.create(first) });
   const current = await requireShelf(shelves, store, first);
   if (cmd.action === "star") {
     if (!current.saved) await shelves.create(current.name);
-    return `${await shelves.toggleStar(current.name) ? "starred" : "unstarred"} ${current.name}`;
+    const starred = await shelves.toggleStar(current.name);
+    return starred ? t("cli.shelf.starredMsg", { name: current.name }) : t("cli.shelf.unstarredMsg", { name: current.name });
   }
   if (cmd.action === "rename") {
-    if (!second) throw new UserError("usage: stash shelf rename <old> <new>", 2);
+    if (!second) throw new UserError(t("cli.shelf.usageRenameError"), 2);
     const renamed = current.saved ? await shelves.rename(current.name, second) : await shelves.create(second);
     await store.reshelve(current.name, renamed);
-    return `renamed ${current.name} to ${renamed}`;
+    return t("cli.shelf.renamedMsg", { old: current.name, new: renamed });
   }
   const count = (await store.list()).filter(onShelf(current.name)).length;
-  if (count && !cmd.force) throw new UserError(`shelf ${current.name} has ${plural(count)}; add --force to delete them too`);
+  if (count && !cmd.force) throw new UserError(t("cli.shelf.deleteForce", { name: current.name, count: plural(count) }));
   await store.reshelve(current.name, null);
   if (current.saved) await shelves.remove(current.name);
-  return `deleted shelf ${current.name}${count ? ` and its ${plural(count)}` : ""}`;
+  const countMsg = count ? t("cli.shelf.deletedWithPrompts", { count: plural(count) }) : "";
+  return t("cli.shelf.deletedMsg", { name: current.name, count: countMsg });
 }
 
 // src/cli/main.ts

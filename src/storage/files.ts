@@ -1,4 +1,5 @@
-import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile, fsync } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { fsyncSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { debug } from '../debug.js';
@@ -60,7 +61,7 @@ export async function writeFileAtomic(file: string, content: string): Promise<vo
     await fd.writeFile(content, 'utf8');
     // Fsync to ensure data is written to disk before rename
     try {
-      await fsync(fd.fd);
+      fsyncSync(fd.fd);
     } catch {
       // If fsync fails, continue anyway; rename is what matters most
     }
