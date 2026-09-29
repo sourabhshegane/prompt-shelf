@@ -89,11 +89,11 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
     }
     case 'delete-shelf': {
       // Confirmation is handled in the UI; just delete the shelf and leave its prompts orphaned
-      // Check if shelf exists first (another session might have deleted it)
-      const exists = await ctx.shelves.find(action.shelf);
-      if (!exists) return { refresh: true, status: { text: t('actions.changedOtherSession'), error: true } };
-      await ctx.shelves.remove(action.shelf);
-      return { refresh: true, status: { text: t('cli.shelf.deletedMsg', { name: action.shelf, count: '' }) } };
+      // Check if shelf exists first and use its canonical name
+      const canonicalName = await ctx.shelves.find(action.shelf);
+      if (!canonicalName) return { refresh: true, status: { text: t('actions.changedOtherSession'), error: true } };
+      await ctx.shelves.remove(canonicalName);
+      return { refresh: true, status: { text: t('cli.shelf.deletedMsg', { name: canonicalName, count: '' }) } };
     }
     case 'rename-shelf': {
       const newName = await ctx.shelves.rename(action.shelf, action.newName);
