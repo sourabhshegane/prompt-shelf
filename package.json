@@ -60,8 +60,7 @@
   "dependencies": {
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/headless": "^6.0.0",
-    "node-pty": "^1.1.0",
-    "prompt-shelf": "^0.1.1"
+    "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

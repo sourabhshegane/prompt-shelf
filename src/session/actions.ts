@@ -1,0 +1,111 @@
+import { isStashDraft, type Prompt } from '../domain/prompt.js';
+import { withOrphans } from '../domain/shelf.js';
+import { t } from '../i18n/index.js';
+import type { Store } from '../storage/prompt-store.js';
+import { deletedMessage, deleteShelf, renameShelf } from '../storage/shelf-ops.js';
+import type { Shelves } from '../storage/shelf-store.js';
+import type { ListAction } from '../ui/list-panel.js';
+import type { PickerAction } from '../ui/save-picker.js';
+import type { Status } from '../ui/types.js';
+
+/** What the actions work with; tests pass real stores in a temp folder. */
+export interface ActionContext {
+  store: Store;
+  shelves: Shelves;
+  /** Adapter name, stored with each prompt. */
+  agent: string;
+  cwd: string;
+  skillPrompt(name: string, afterText: boolean): string;
+}
+
+/** What the app should do after an action, in this order. */
+export interface Effect {
+  /** Close the open panel. */
+  close?: boolean;
+  /** Clear the draft that was just saved from the agent's box. */
+  clearDraft?: boolean;
+  /** Paste this into the agent's box (after what's already there). */
+  insert?: string;
+  /** Reload the list panel's data. */
+  refresh?: boolean;
+  /** Then open this shelf's tab. */
+  showShelf?: string;
+  /** A message: in the panel if it stays open, otherwise as a toast. */
+  status?: Status;
+}
+
+/** The data the list panel shows: prompts, shelves (including ones only prompts still point at) and stars. */
+export async function panelData(ctx: ActionContext): Promise<{ prompts: Prompt[]; shelves: string[]; starred: string[] }> {
+  const prompts = await ctx.store.list();
+  return { prompts, shelves: withOrphans(await ctx.shelves.list(), prompts), starred: await ctx.shelves.starred() };
+}
+
+const gone: Effect = { refresh: true, status: { text: t('actions.changedOtherSession'), error: true } };
+const draftsLeft = async (ctx: ActionContext) => (await ctx.store.list()).filter(isStashDraft).length;
+
+/** Carries out a list-panel action. `hasDraft`: the agent's box already had text when the list opened. */
+export async function listEffect(ctx: ActionContext, action: ListAction, hasDraft: boolean): Promise<Effect> {
+  switch (action.type) {
+    case 'close':
+      return { close: true };
+    case 'pop': {
+      if (!(await ctx.store.remove(action.prompt.id))) return gone;
+      const left = await draftsLeft(ctx);
+      const key = hasDraft ? 'actions.appendedLeft' : 'actions.poppedLeft';
+      return { close: true, insert: action.prompt.text, status: { text: t(key, { left }) } };
+    }
+    case 'use': {
+      if (!(await ctx.store.markUsed(action.prompt.id))) return gone;
+      const key = action.prompt.shelf
+        ? (hasDraft ? 'actions.appendedShelf' : 'actions.keptShelf')
+        : (hasDraft ? 'actions.appendedKeptStash' : 'actions.keptStash');
+      return { close: true, insert: action.prompt.text, status: { text: t(key, { shelf: action.prompt.shelf ?? '' }) } };
+    }
+    case 'use-skill':
+      return { close: true, insert: ctx.skillPrompt(action.name, hasDraft), status: { text: t('actions.skillInserted', { name: action.name }) } };
+    case 'delete':
+      return (await ctx.store.remove(action.prompt.id)) ? { refresh: true, status: { text: t('actions.deleted') } } : gone;
+    case 'save-to-shelf': {
+      // Registers the shelf too, in case another session renamed or deleted it meanwhile.
+      const shelf = await ctx.shelves.create(action.shelf);
+      if (!(await ctx.store.setShelf(action.prompt.id, shelf))) return gone;
+      return { refresh: true, status: { text: t('save.savedTo', { shelf }) } };
+    }
+    case 'create-shelf': {
+      const shelf = await ctx.shelves.create(action.name);
+      if (!action.prompt) return { refresh: true, showShelf: shelf, status: { text: t('actions.shelfReady', { name: shelf }) } };
+      if (!(await ctx.store.setShelf(action.prompt.id, shelf))) return gone;
+      return { refresh: true, status: { text: t('save.savedTo', { shelf }) } };
+    }
+    case 'star-shelf': {
+      const shelf = await ctx.shelves.create(action.shelf);
+      const starred = await ctx.shelves.toggleStar(shelf);
+      const key = starred ? 'actions.starredShelf' : 'actions.unstarredShelf';
+      return { refresh: true, status: { text: t(key, { shelf }) } };
+    }
+    case 'move-shelf': {
+      const moved = await ctx.shelves.move(await ctx.shelves.create(action.shelf), action.step);
+      return moved ? { refresh: true } : { status: { text: t(action.step < 0 ? 'actions.alreadyFirst' : 'actions.alreadyLast') } };
+    }
+    case 'delete-shelf':
+      // The panel already asked; the prompts on the shelf go with it.
+      return { refresh: true, status: { text: deletedMessage(await deleteShelf(ctx.shelves, ctx.store, action.shelf, true)) } };
+    case 'rename-shelf': {
+      const { from, to } = await renameShelf(ctx.shelves, ctx.store, action.shelf, action.newName);
+      return { refresh: true, showShelf: to, status: { text: t('cli.shelf.renamedMsg', { old: from, new: to }) } };
+    }
+    case 'none':
+      return {};
+  }
+}
+
+/** Carries out a save-picker action for the draft `text` read from the agent's box. */
+export async function pickerEffect(ctx: ActionContext, action: PickerAction, text: string): Promise<Effect> {
+  if (action.type === 'none') return {};
+  if (action.type === 'cancel') return { close: true };
+  const shelf = action.type === 'create-shelf' ? await ctx.shelves.create(action.name) : action.shelf && (await ctx.shelves.create(action.shelf));
+  await ctx.store.add({ text, agent: ctx.agent, cwd: ctx.cwd, ...(shelf ? { shelf } : {}) });
+  const count = await draftsLeft(ctx);
+  const statusText = shelf ? t('save.savedTo', { shelf }) : t('save.stashed', { count });
+  return { close: true, clearDraft: true, status: { text: statusText } };
+}

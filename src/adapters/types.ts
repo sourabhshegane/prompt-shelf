@@ -1,65 +1,43 @@
-import type { PasteLabel } from '../core/pastes.js';
-import type { Cursor } from '../core/screen.js';
+import type { Skill } from '../domain/skill.js';
+import type { Cursor } from '../terminal/screen.js';
+import type { PasteLabel } from '../terminal/pastes.js';
 
 export interface Draft {
   text: string;
 }
 
+/**
+ * Everything prompt-shelf knows about one agent CLI. Supporting a new agent means writing one of
+ * these (see CONTRIBUTING.md, "Adding an agent"); nothing outside src/adapters/ changes.
+ */
 export interface AgentAdapter {
+  /** Id used on the command line (`stash <name>`) and stored with each prompt. */
   name: string;
+  /** How the agent is named in the UI. */
+  displayName: string;
+  /** The agent's executable; also the name of its shim. */
   command: string;
-  readDraft(lines: string[], cursor: Cursor, cols?: number): Draft | null;
-  /** The empty input box shows a faint placeholder that must not be read as a draft. */
-  dimPlaceholder?: boolean;
-  unsafeDraft: RegExp;
-  /** Placeholder the agent shows for a collapsed paste; lets a stash keep the real text. */
-  pasteLabel?: PasteLabel;
-  clearDraft(draft: Draft): string;
-  inputTop(lines: string[]): number | null;
-  isBorder(line: string): boolean;
+  /** Keys the agent uses itself, which can't be prompt-shelf hotkeys. Lowercase, e.g. `ctrl+t`. */
   reservedKeys: string[];
-}
 
-const END_KEY = '\x1b[F';
-const BACKSPACE = '\x7f';
+  /** The draft in the agent's input box, or null when the cursor isn't in the box. */
+  readDraft(lines: string[], cursor: Cursor, cols?: number): Draft | null;
+  /** Keys that erase `draft` from the box. */
+  clearDraft(draft: Draft): string;
+  /** The screen row where the input box starts, or null when it isn't on screen. */
+  inputTop(lines: string[]): number | null;
+  /** Whether `line` is the box's border (panels go above it). */
+  isBorder(line: string): boolean;
+  /** The empty box shows a faint placeholder (e.g. `Try "refactor <filepath>"`) that must not be read as a draft. */
+  dimPlaceholder?: boolean;
 
-export function backspaceClear(draft: Draft): string {
-  return END_KEY + BACKSPACE.repeat([...draft.text].length);
-}
+  /** How the agent shows a collapsed paste, so a stash keeps the real text. */
+  pasteLabel?: PasteLabel;
+  /** Matches any sign of a collapsed paste, even a partly drawn one; such a draft is never saved as is. */
+  unsafeDraft: RegExp;
 
-export interface MarkerSpec {
-  marker: RegExp;
-  continuation: RegExp;
-  terminator: RegExp;
-}
-
-export function findInputStart(lines: string[], spec: MarkerSpec): number | null {
-  for (let y = lines.length - 1; y >= 0; y--) {
-    if (spec.marker.test(lines[y] ?? '')) return y;
-  }
-  return null;
-}
-
-const WRAP_SLACK = 3;
-
-const visibleWidth = (line: string) => [...line.trimEnd()].length;
-
-const wrapsInto = (previous: string, cols: number | undefined) => cols !== undefined && visibleWidth(previous) >= cols - WRAP_SLACK;
-
-export function readMarkedDraft(lines: string[], cursor: Cursor, spec: MarkerSpec, cols?: number): Draft | null {
-  const start = findInputStart(lines, spec);
-  if (start === null || cursor.y < start) return null;
-  let text = spec.marker.exec(lines[start] ?? '')?.[1] ?? '';
-  let end = start;
-  for (let y = start + 1; y < lines.length; y++) {
-    const line = lines[y] ?? '';
-    if (spec.terminator.test(line) || line.trim() === '') break;
-    const cont = spec.continuation.exec(line);
-    if (!cont) break;
-    text += (wrapsInto(lines[y - 1] ?? '', cols) ? ' ' : '\n') + (cont[1] ?? '');
-    end = y;
-  }
-  if (cursor.y > end) return null;
-  text = text.replace(/\s+$/, '');
-  return text ? { text } : null;
+  /** Skills the agent can use in `cwd`, for the Skills tab. */
+  skills(cwd: string): Skill[];
+  /** What picking a skill puts in the box, in the agent's own syntax; `afterText` when the box already has text. */
+  skillPrompt(name: string, afterText: boolean): string;
 }

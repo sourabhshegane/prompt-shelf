@@ -1,5 +1,6 @@
 # prompt-shelf
 
+[![CI](https://github.com/sourabhshegane/prompt-shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/sourabhshegane/prompt-shelf/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/prompt-shelf.svg)](https://www.npmjs.com/package/prompt-shelf)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![node >= 20](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
@@ -77,6 +78,8 @@ In the list:
 | `Enter` | Unstash: add the entry to the box (on a new line after your text) and remove it from the stash |
 | `a` | Same, but keep it in the stash |
 | `d` then `y` | Delete the entry |
+| `r` | On a shelf: rename it (its prompts move with it) |
+| `D` then `y` | On a shelf: delete it and the prompts on it |
 | `/` | Search; `Esc` clears it |
 | `Tab` | Switch between this repo's entries and all of them |
 | `Esc`, `q`, `Ctrl+C`, `Ctrl+F` or `Ctrl+Q` | Close the list |
@@ -136,10 +139,13 @@ Skipping `stash disable` is fine: the shims fall through to the real
 
 ## Supported
 
-| | Status |
+| | Last tested with (macOS) |
 | --- | --- |
-| Claude Code | Tested on macOS |
-| Codex CLI | Tested on macOS |
+| Claude Code | 2.1.284 |
+| Codex CLI | 0.157.1 |
+
+CI runs typecheck, tests and build on Node 20, 22 and 24 (macOS) for every
+push and pull request to `main`.
 
 ## How it works
 
