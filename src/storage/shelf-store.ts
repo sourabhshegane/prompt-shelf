@@ -100,8 +100,12 @@ export class Shelves {
     const clean = validName(name);
     return this.change((file) => {
       const existing = this.findByName(file.shelves, clean);
-      if (existing) return existing.name;
+      if (existing) {
+        console.error('DEBUG shelf-store.create: shelf already exists', { name: clean });
+        return existing.name;
+      }
       file.shelves.push({ id: randomUUID(), name: clean });
+      console.error('DEBUG shelf-store.create: added new shelf', { name: clean, totalShelves: file.shelves.length });
       return clean;
     });
   }
@@ -120,8 +124,10 @@ export class Shelves {
   async remove(name: string): Promise<void> {
     await this.change((file) => {
       const current = this.requireByName(file.shelves, name);
+      console.error('DEBUG shelf-store.remove: removing shelf', { name: current.name, id: current.id, beforeCount: file.shelves.length });
       file.shelves = file.shelves.filter((s) => s.id !== current.id);
       file.starred = file.starred.filter((id) => id !== current.id);
+      console.error('DEBUG shelf-store.remove: removed shelf', { name: current.name, afterCount: file.shelves.length });
     });
   }
 
