@@ -1702,6 +1702,9 @@ var SavePicker = class {
       case "n":
         this.naming = new TextInput();
         return { type: "none" };
+      case "d":
+        if (this.index > 0) return { type: "delete-shelf", shelf: this.shelves[this.index - 1] };
+        return { type: "none" };
       case "\x1B":
       case "":
         return { type: "cancel" };
@@ -1717,7 +1720,12 @@ var SavePicker = class {
     let footer;
     if (status) footer = statusLine(status);
     else if (this.naming) footer = this.naming.render("new shelf name:", "enter create \xB7 esc back");
-    else footer = keyHints([["\u2190\u2192", "choose"], ["enter", "save"], ["n", "new shelf"], ["esc", "cancel"]]);
+    else {
+      const hints = [["\u2190\u2192", "choose"], ["enter", "save"], ["n", "new shelf"]];
+      if (this.index > 0) hints.push(["d", "delete"]);
+      hints.push(["esc", "cancel"]);
+      footer = keyHints(hints);
+    }
     return panelFrame([`${ansi.bold}${label}${ansi.reset}${places}${addNew}`, ` ${ansi.dim}${flatten(this.draft)}${ansi.reset}`], footer, cols, rows);
   }
 };
@@ -1777,6 +1785,12 @@ async function listEffect(ctx, action, hasDraft) {
 async function pickerEffect(ctx, action, text) {
   if (action.type === "none") return {};
   if (action.type === "cancel") return { close: true };
+  if (action.type === "delete-shelf") {
+    const count2 = (await ctx.store.list()).filter((p) => p.shelf?.toLowerCase() === action.shelf.toLowerCase()).length;
+    if (count2 > 0) return { status: { text: t("cli.shelf.deleteForce", { name: action.shelf, count: tn("cli.shelf.pluralPrompts", count2, { count: count2 }) }), error: true } };
+    await ctx.shelves.remove(action.shelf);
+    return { refresh: true, status: { text: t("cli.shelf.deletedMsg", { name: action.shelf, count: "" }) } };
+  }
   const shelf = action.type === "create-shelf" ? await ctx.shelves.create(action.name) : action.shelf && await ctx.shelves.create(action.shelf);
   await ctx.store.add({ text, agent: ctx.agent, cwd: ctx.cwd, ...shelf ? { shelf } : {} });
   const count = await draftsLeft(ctx);

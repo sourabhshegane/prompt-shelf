@@ -96,6 +96,12 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
 export async function pickerEffect(ctx: ActionContext, action: PickerAction, text: string): Promise<Effect> {
   if (action.type === 'none') return {};
   if (action.type === 'cancel') return { close: true };
+  if (action.type === 'delete-shelf') {
+    const count = (await ctx.store.list()).filter((p) => p.shelf?.toLowerCase() === action.shelf.toLowerCase()).length;
+    if (count > 0) return { status: { text: t('cli.shelf.deleteForce', { name: action.shelf, count: tn('cli.shelf.pluralPrompts', count, { count }) }), error: true } };
+    await ctx.shelves.remove(action.shelf);
+    return { refresh: true, status: { text: t('cli.shelf.deletedMsg', { name: action.shelf, count: '' }) } };
+  }
   const shelf = action.type === 'create-shelf' ? await ctx.shelves.create(action.name) : action.shelf && (await ctx.shelves.create(action.shelf));
   await ctx.store.add({ text, agent: ctx.agent, cwd: ctx.cwd, ...(shelf ? { shelf } : {}) });
   const count = await draftsLeft(ctx);

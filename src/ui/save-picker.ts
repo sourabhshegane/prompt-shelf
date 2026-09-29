@@ -9,7 +9,9 @@ export type PickerAction =
   | { type: 'cancel' }
   /** Save the draft to a shelf, or to the stash when `shelf` is undefined. */
   | { type: 'save'; shelf?: string }
-  | { type: 'create-shelf'; name: string };
+  | { type: 'create-shelf'; name: string }
+  /** Delete the currently picked shelf. */
+  | { type: 'delete-shelf'; shelf: string };
 
 /**
  * What the stash key shows: where to put the draft. The stash is picked by default, so the hotkey
@@ -65,6 +67,10 @@ export class SavePicker implements Panel<PickerAction> {
       case 'n':
         this.naming = new TextInput();
         return { type: 'none' };
+      case 'd':
+        // Can only delete a shelf, not the stash
+        if (this.index > 0) return { type: 'delete-shelf', shelf: this.shelves[this.index - 1]! };
+        return { type: 'none' };
       case '\x1b':
       case '\x03':
         return { type: 'cancel' };
@@ -81,7 +87,12 @@ export class SavePicker implements Panel<PickerAction> {
     let footer: string;
     if (status) footer = statusLine(status);
     else if (this.naming) footer = this.naming.render('new shelf name:', 'enter create · esc back');
-    else footer = keyHints([['←→', 'choose'], ['enter', 'save'], ['n', 'new shelf'], ['esc', 'cancel']]);
+    else {
+      const hints: [string, string][] = [['←→', 'choose'], ['enter', 'save'], ['n', 'new shelf']];
+      if (this.index > 0) hints.push(['d', 'delete']);
+      hints.push(['esc', 'cancel']);
+      footer = keyHints(hints);
+    }
     return panelFrame([`${ansi.bold}${label}${ansi.reset}${places}${addNew}`, ` ${ansi.dim}${flatten(this.draft)}${ansi.reset}`], footer, cols, rows);
   }
 }
