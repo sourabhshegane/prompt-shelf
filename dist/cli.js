@@ -1832,9 +1832,12 @@ async function listEffect(ctx, action, hasDraft) {
     }
     case "delete-shelf": {
       const canonicalName = await ctx.shelves.find(action.shelf);
-      if (!canonicalName) return { refresh: true, status: { text: t("actions.changedOtherSession"), error: true } };
-      await ctx.shelves.remove(canonicalName);
-      return { refresh: true, status: { text: t("cli.shelf.deletedMsg", { name: canonicalName, count: "" }) } };
+      if (canonicalName) {
+        await ctx.shelves.remove(canonicalName);
+        return { refresh: true, status: { text: t("cli.shelf.deletedMsg", { name: canonicalName, count: "" }) } };
+      }
+      const count = await ctx.store.reshelve(action.shelf, null);
+      return { refresh: true, status: { text: `deleted ${action.shelf} (${count} prompts moved to stash)` } };
     }
     case "rename-shelf": {
       const newName = await ctx.shelves.rename(action.shelf, action.newName);

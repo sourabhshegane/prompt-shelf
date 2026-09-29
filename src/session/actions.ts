@@ -88,12 +88,18 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
       return moved ? { refresh: true } : { status: { text: t(action.step < 0 ? 'actions.alreadyFirst' : 'actions.alreadyLast') } };
     }
     case 'delete-shelf': {
-      // Confirmation is handled in the UI; just delete the shelf and leave its prompts orphaned
-      // Check if shelf exists first and use its canonical name
+      // Confirmation is handled in the UI
+      // Check if shelf exists and use its canonical name, or if it's an orphan, just remove its prompts
       const canonicalName = await ctx.shelves.find(action.shelf);
-      if (!canonicalName) return { refresh: true, status: { text: t('actions.changedOtherSession'), error: true } };
-      await ctx.shelves.remove(canonicalName);
-      return { refresh: true, status: { text: t('cli.shelf.deletedMsg', { name: canonicalName, count: '' }) } };
+      if (canonicalName) {
+        // Shelf exists in shelves file, delete it normally
+        await ctx.shelves.remove(canonicalName);
+        return { refresh: true, status: { text: t('cli.shelf.deletedMsg', { name: canonicalName, count: '' }) } };
+      }
+      // Shelf is an orphan (prompts point to it but it doesn't exist in shelves file)
+      // Just remove its prompts by moving them to stash
+      const count = await ctx.store.reshelve(action.shelf, null);
+      return { refresh: true, status: { text: `deleted ${action.shelf} (${count} prompts moved to stash)` } };
     }
     case 'rename-shelf': {
       const newName = await ctx.shelves.rename(action.shelf, action.newName);
