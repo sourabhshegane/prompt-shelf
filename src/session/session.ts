@@ -4,6 +4,7 @@ import type { Scope } from '../domain/scope.js';
 import type { Skill } from '../domain/skill.js';
 import { debug } from '../debug.js';
 import { describeError } from '../errors.js';
+import { t } from '../i18n/index.js';
 import { injectPaste } from '../terminal/inject.js';
 import { KeyInterceptor, type Hotkey } from '../terminal/keys.js';
 import { PasteLabels, PasteRecorder, PasteTracker } from '../terminal/pastes.js';
@@ -163,10 +164,10 @@ export class Session {
   private async openPicker(): Promise<void> {
     const { adapter, ctx, display } = this.deps;
     const draft = await this.readDraft();
-    if (!draft) return display.toast({ text: 'nothing to stash' });
+    if (!draft) return display.toast({ text: t('save.nothing') });
     const text = this.tracker ? this.tracker.expand(draft.text) : draft.text;
     if (text === null) debug('paste', 'a collapsed paste could not be matched', { waiting: this.tracker?.waiting });
-    if (text === null || adapter.unsafeDraft.test(text)) return display.toast({ text: 'draft contains a collapsed paste — expand it first', error: true });
+    if (text === null || adapter.unsafeDraft.test(text)) return display.toast({ text: t('save.collapsedPaste'), error: true });
     const data = await panelData(ctx);
     this.picker = { ui: new SavePicker(text, data.shelves, data.starred), draft, text };
     display.show(this.picker.ui, PICKER_ROWS);

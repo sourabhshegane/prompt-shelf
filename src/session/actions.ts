@@ -1,5 +1,6 @@
 import { isStashDraft, type Prompt } from '../domain/prompt.js';
 import { withOrphans } from '../domain/shelf.js';
+import { t, tn } from '../i18n/index.js';
 import type { Store } from '../storage/prompt-store.js';
 import type { Shelves } from '../storage/shelf-store.js';
 import type { ListAction } from '../ui/list-panel.js';
@@ -38,7 +39,7 @@ export async function panelData(ctx: ActionContext): Promise<{ prompts: Prompt[]
   return { prompts, shelves: withOrphans(await ctx.shelves.list(), prompts), starred: await ctx.shelves.starred() };
 }
 
-const gone: Effect = { refresh: true, status: { text: 'that prompt was changed in another session', error: true } };
+const gone: Effect = { refresh: true, status: { text: t('actions.changedOtherSession'), error: true } };
 const draftsLeft = async (ctx: ActionContext) => (await ctx.store.list()).filter(isStashDraft).length;
 
 /** Carries out a list-panel action. `hasDraft`: the agent's box already had text when the list opened. */
@@ -49,37 +50,42 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
     case 'pop': {
       if (!(await ctx.store.remove(action.prompt.id))) return gone;
       const left = await draftsLeft(ctx);
-      return { close: true, insert: action.prompt.text, status: { text: `${hasDraft ? 'appended' : 'popped'} · ${left} left` } };
+      const key = hasDraft ? 'actions.appendedLeft' : 'actions.poppedLeft';
+      return { close: true, insert: action.prompt.text, status: { text: t(key, { left }) } };
     }
     case 'use': {
       if (!(await ctx.store.markUsed(action.prompt.id))) return gone;
-      const kept = action.prompt.shelf ? `kept on ${action.prompt.shelf}` : 'kept in stash';
-      return { close: true, insert: action.prompt.text, status: { text: `${hasDraft ? 'appended' : 'used'} · ${kept}` } };
+      const key = action.prompt.shelf
+        ? (hasDraft ? 'actions.appendedShelf' : 'actions.keptShelf')
+        : (hasDraft ? 'actions.appendedKeptStash' : 'actions.keptStash');
+      const params = action.prompt.shelf ? { shelf: action.prompt.shelf } : {};
+      return { close: true, insert: action.prompt.text, status: { text: t(key, params) } };
     }
     case 'use-skill':
-      return { close: true, insert: ctx.skillPrompt(action.name, hasDraft), status: { text: `skill: ${action.name}` } };
+      return { close: true, insert: ctx.skillPrompt(action.name, hasDraft), status: { text: t('actions.skillInserted', { name: action.name }) } };
     case 'delete':
-      return (await ctx.store.remove(action.prompt.id)) ? { refresh: true, status: { text: 'deleted' } } : gone;
+      return (await ctx.store.remove(action.prompt.id)) ? { refresh: true, status: { text: t('actions.deleted') } } : gone;
     case 'save-to-shelf': {
       // Registers the shelf too, in case another session renamed or deleted it meanwhile.
       const shelf = await ctx.shelves.create(action.shelf);
       if (!(await ctx.store.setShelf(action.prompt.id, shelf))) return gone;
-      return { refresh: true, status: { text: `saved to ${shelf}` } };
+      return { refresh: true, status: { text: t('save.savedTo', { shelf }) } };
     }
     case 'create-shelf': {
       const shelf = await ctx.shelves.create(action.name);
-      if (!action.prompt) return { refresh: true, showShelf: shelf, status: { text: `shelf ${shelf} is ready` } };
+      if (!action.prompt) return { refresh: true, showShelf: shelf, status: { text: t('actions.shelfReady', { name: shelf }) } };
       if (!(await ctx.store.setShelf(action.prompt.id, shelf))) return gone;
-      return { refresh: true, status: { text: `saved to ${shelf}` } };
+      return { refresh: true, status: { text: t('save.savedTo', { shelf }) } };
     }
     case 'star-shelf': {
       const shelf = await ctx.shelves.create(action.shelf);
       const starred = await ctx.shelves.toggleStar(shelf);
-      return { refresh: true, status: { text: `${starred ? 'starred' : 'unstarred'} ${shelf}` } };
+      const key = starred ? 'actions.starredShelf' : 'actions.unstarredShelf';
+      return { refresh: true, status: { text: t(key, { shelf }) } };
     }
     case 'move-shelf': {
       const moved = await ctx.shelves.move(await ctx.shelves.create(action.shelf), action.step);
-      return moved ? { refresh: true } : { status: { text: action.step < 0 ? 'already first' : 'already last' } };
+      return moved ? { refresh: true } : { status: { text: t(action.step < 0 ? 'actions.alreadyFirst' : 'actions.alreadyLast') } };
     }
     case 'none':
       return {};
@@ -92,5 +98,7 @@ export async function pickerEffect(ctx: ActionContext, action: PickerAction, tex
   if (action.type === 'cancel') return { close: true };
   const shelf = action.type === 'create-shelf' ? await ctx.shelves.create(action.name) : action.shelf && (await ctx.shelves.create(action.shelf));
   await ctx.store.add({ text, agent: ctx.agent, cwd: ctx.cwd, ...(shelf ? { shelf } : {}) });
-  return { close: true, clearDraft: true, status: { text: shelf ? `saved to ${shelf}` : `stashed (${await draftsLeft(ctx)})` } };
+  const count = await draftsLeft(ctx);
+  const statusText = shelf ? t('save.savedTo', { shelf }) : t('save.stashed', { count });
+  return { close: true, clearDraft: true, status: { text: statusText } };
 }

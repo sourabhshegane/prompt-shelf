@@ -3,6 +3,7 @@ import { isStashDraft, nextSort, onShelf, sortSaved, type Prompt, type SortOrder
 import { scoped, type Scope } from '../domain/scope.js';
 import type { Skill } from '../domain/skill.js';
 import { ago } from '../domain/time.js';
+import { t } from '../i18n/index.js';
 import { ansi, theme } from '../terminal/ansi.js';
 import { splitKeys } from '../terminal/keys.js';
 import { clip, flatten, padCells, visibleWidth } from '../terminal/text.js';
@@ -29,7 +30,14 @@ export type Tab = { kind: 'stash' } | { kind: 'skills' } | { kind: 'shelf'; name
 /** A row in the list: a prompt (stash draft or saved prompt), or a skill on the Skills tab. */
 export type Row = { kind: 'prompt'; prompt: Prompt } | { kind: 'skill'; skill: Skill };
 
-const SORT_LABEL: Record<SortOrder, string> = { newest: 'newest first', 'most-used': 'most used', recent: 'recently used' };
+const SORT_LABEL = (order: SortOrder): string => {
+  const labels: Record<SortOrder, string> = {
+    newest: t('list.sortLabel_newest'),
+    'most-used': t('list.sortLabel_mostUsed'),
+    recent: t('list.sortLabel_recent'),
+  };
+  return labels[order];
+};
 
 export interface ListPanelOptions {
   cwd: string;
@@ -266,53 +274,55 @@ export class ListPanel implements Panel<ListAction> {
   private footer(cols: number): string {
     switch (this.mode) {
       case 'confirm-delete':
-        return ` ${ansi.bold}${theme.error}delete this prompt?${ansi.reset}  ${keyHints([['y', 'yes'], ['n', 'no']])}`;
+        return ` ${ansi.bold}${theme.error}${t('list.deletePrompt')}${ansi.reset}  ${keyHints([['y', t('list.deleteYes')], ['n', t('list.deleteNo')]])}`;
       case 'help':
         return keyHints([['any key', 'back']]);
       case 'filter':
-        return ` ${ansi.bold}/ ${this.filterText}▏${ansi.reset}${ansi.dim}   enter done · esc clear${ansi.reset}`;
+        return ` ${ansi.bold}/ ${this.filterText}▏${ansi.reset}${ansi.dim}   ${t('list.filterDone')}${ansi.reset}`;
       case 'new-shelf':
-        return this.nameInput.render('new shelf name:', 'enter create · esc cancel');
+        return this.nameInput.render('new shelf name:', t('list.newShelfHint'));
       case 'pick-shelf': {
-        const hint = '   ←→ choose · enter save · n new shelf · esc cancel';
-        const label = ' save to shelf:';
+        const hint = `   ${t('list.pickShelfHint')}`;
+        const label = ` ${t('list.saveToShelf')}`;
         const row = choiceRow(this.saveTargets(), this.target, Math.max(10, cols - label.length - hint.length));
         return `${ansi.bold}${label}${ansi.reset}${row}${ansi.dim}${hint}${ansi.reset}`;
       }
     }
-    if (this.tab.kind === 'skills') return keyHints([['enter', 'use this skill'], ['/', 'search'], ['?', 'more keys'], ['esc', 'close']]);
-    const save: [string, string] = this.tab.kind === 'shelf' ? ['s', 'move'] : ['s', 'save to a shelf'];
-    return keyHints([['enter', 'use'], save, ['/', 'search'], ['?', 'more keys'], ['esc', 'close']]);
+    if (this.tab.kind === 'skills') return keyHints([['enter', t('list.key.useSkill', { agent: this.agent })], ['/', t('list.key.search')], ['?', t('list.key.moreKeys')], ['esc', t('list.key.closeList')]]);
+    const save: [string, string] = this.tab.kind === 'shelf' ? ['s', t('list.key.movePrompt')] : ['s', t('list.key.saveDraft')];
+    return keyHints([['enter', t('list.key.usePrompt')], save, ['/', t('list.key.filter')], ['?', t('list.key.moreKeys')], ['esc', t('list.key.esc')]]);
   }
 
   private helpLines(): string[] {
     const tab = this.tab;
     const shelf = tab.kind === 'shelf';
     const both: [string, string][] = [
-      ['←  →', 'switch list'],
-      ['↑  ↓  j  k', 'move'],
+      [t('list.key.switchTab'), t('list.key.switchList')],
+      [t('list.key.navUp'), t('list.key.moveUp')],
     ];
     let rows: [string, string][];
     if (tab.kind === 'skills') {
-      rows = [...both, ['enter', `put the skill in the box, the way ${this.agent} runs skills`], ['/', 'search skills'], ['esc', 'close the list']];
+      rows = [...both, ['enter', t('list.key.useSkill', { agent: this.agent })], ['/', t('list.key.search')], ['esc', t('list.key.closeList')]];
     } else {
-      const star = shelf && this.starredShelves.includes(tab.name) ? 'unstar this shelf' : 'star this shelf (starred come first)';
+      const starAction = shelf && this.starredShelves.includes(tab.name) ? 'unstar' : 'star';
+      const star = t('list.key.starShelf', { action: starAction });
+      const scopeChange = this.currentScope === 'repo' ? t('list.key.scopeToAll') : t('list.key.scopeToRepo');
       rows = [
         ...both,
-        ['enter', shelf ? 'put the prompt in the box (it stays on the shelf)' : 'put the draft in the box (it leaves the stash)'],
-        ...(shelf ? [] : ([['a', 'put the draft in the box and keep it']] as [string, string][])),
-        ['s', shelf ? 'move the prompt to another shelf' : 'save the draft to a shelf'],
-        ['n', 'new shelf'],
+        ['enter', shelf ? t('list.key.usePromptKeep') : t('list.key.putDraft')],
+        ...(shelf ? [] : ([['a', t('list.key.keepDraft')]] as [string, string][])),
+        ['s', shelf ? t('list.key.movePrompt') : t('list.key.saveDraft')],
+        ['n', t('list.key.newShelf')],
         ...(shelf
           ? ([
-              ['o', `sort: ${SORT_LABEL[nextSort(this.sortOrder)]} next`],
+              ['o', t('list.key.sortNext', { next: SORT_LABEL(nextSort(this.sortOrder)) })],
               ['*', star],
-              ['<  >', 'move this list left / right'],
+              ['<  >', t('list.key.moveShelfLR')],
             ] as [string, string][])
-          : ([['tab', this.currentScope === 'repo' ? 'this repo → all repos' : 'all repos → this repo']] as [string, string][])),
-        ['d', 'delete'],
-        ['/', 'search this list'],
-        ['esc', 'close the list'],
+          : ([['tab', t('list.key.scopeToggle', { change: scopeChange })]] as [string, string][])),
+        ['d', t('list.key.delete')],
+        ['/', t('list.key.filter')],
+        ['esc', t('list.key.esc')],
       ];
     }
     // Two columns, so every key fits in the panel's height.
@@ -328,10 +338,10 @@ export class ListPanel implements Panel<ListAction> {
   private emptyMessage(): string | null {
     const tab = this.tab;
     if (this.tabRows(tab).length) return null;
-    if (tab.kind === 'skills') return `no skills found for ${this.agent} here`;
-    if (tab.kind === 'shelf') return `${tab.name} is empty — on the stash tab press s on a draft to save it here`;
+    if (tab.kind === 'skills') return t('list.noSkillsFor', { agent: this.agent });
+    if (tab.kind === 'shelf') return t('list.emptyShelf', { name: tab.name });
     const drafts = this.drafts().length;
-    return drafts ? `nothing stashed here — tab to see all (${drafts})` : `nothing stashed — type in the agent's box and press ${this.hotkeyLabel}`;
+    return drafts ? t('list.emptyStashTab', { count: drafts }) : t('list.emptyStash', { hotkey: this.hotkeyLabel });
   }
 
   private tabName(tab: Tab): string {
@@ -343,7 +353,7 @@ export class ListPanel implements Panel<ListAction> {
   // The lists as tabs, then "+ new (n)", with "←→ switch list" on the right when there's room.
   private tabBar(cols: number): string {
     const addNew = addNewHint();
-    const hint = '←→ switch list';
+    const hint = t('list.switchLists');
     const labels = this.tabs().map((t) => `${this.tabName(t)} ${this.tabRows(t).length}`);
     const style = (l: string) => styleStar(l).replace(/ (\d+)$/, ` ${ansi.dim}$1${ansi.reset}`);
     const row = choiceRow(labels, this.tabIndex, cols - visibleWidth(addNew) - hint.length - 2, style) + addNew;
@@ -355,14 +365,16 @@ export class ListPanel implements Panel<ListAction> {
   private infoLine(cols: number, shown: number): string {
     const tab = this.tab;
     let about: string;
-    if (tab.kind === 'skills') about = `what ${this.agent} can use in this folder · enter names one in the box`;
-    else if (tab.kind === 'shelf') about = `saved prompts · they stay here when you use them · ${SORT_LABEL[this.sortOrder]}`;
+    if (tab.kind === 'skills') about = t('list.skillsTip', { agent: this.agent });
+    else if (tab.kind === 'shelf') about = t('list.savedPromptsTip', { sort: SORT_LABEL(this.sortOrder) });
     else {
       const drafts = this.drafts().length;
-      const where = this.currentScope === 'all' ? `from every repo (${drafts})` : `in this repo (${this.tabRows(tab).length} of ${drafts})`;
-      about = `drafts you parked ${where} · used once, then gone`;
+      const where = this.currentScope === 'all'
+        ? t('list.draftsCross', { count: drafts })
+        : t('list.draftsThisRepo', { shown: this.tabRows(tab).length, total: drafts });
+      about = t('list.draftsTip', { where });
     }
-    if (this.filterText) about += ` · /${this.filterText}`;
+    if (this.filterText) about += ` · ${t('list.filterIndicator', { query: this.filterText })}`;
     const title = tab.kind === 'shelf' ? tab.name : this.tabName(tab);
     const position = shown && this.mode !== 'help' ? `${this.index + 1}/${shown}` : '';
     const gap = Math.max(1, cols - 4 - visibleWidth(title) - visibleWidth(about) - position.length);

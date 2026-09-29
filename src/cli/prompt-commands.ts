@@ -2,6 +2,7 @@ import { basename } from 'node:path';
 import { isStashDraft, onShelf, type Prompt } from '../domain/prompt.js';
 import { scoped } from '../domain/scope.js';
 import { localTime } from '../domain/time.js';
+import { t } from '../i18n/index.js';
 import { UserError } from '../errors.js';
 import { clip, flatten } from '../terminal/text.js';
 import type { View } from './args.js';
@@ -16,8 +17,12 @@ export interface ListScope extends Partial<View> {
 const REMOVED_PREVIEW = 60;
 
 /** The line printed after a prompt is removed, so the user sees what went. */
-export const describeRemoved = (p: Prompt): string =>
-  `removed: [${p.shelf ? `shelf ${p.shelf}` : `${p.agent} · ${basename(p.cwd)}`}] ${clip(flatten(p.text), REMOVED_PREVIEW)}`;
+export const describeRemoved = (p: Prompt): string => {
+  const location = p.shelf
+    ? t('cli.shelf.removedShelfFormat', { shelf: p.shelf })
+    : t('cli.shelf.removedAgentFormat', { agent: p.agent, path: basename(p.cwd) });
+  return t('cli.shelf.removed', { location, text: clip(flatten(p.text), REMOVED_PREVIEW) });
+};
 
 const formatPrompt = (p: Prompt, i: number) => {
   const text = flatten(p.text);
@@ -37,7 +42,7 @@ export function listLines(prompts: Prompt[], scope: ListScope): string[] {
   const lines = shown.map(formatPrompt);
   if (!scope.shelf) {
     const hidden = prompts.filter(isStashDraft).length - shown.length;
-    if (hidden > 0) lines.push(`${hidden} more in other repos — stash list --all`);
+    if (hidden > 0) lines.push(t('cli.shelf.moreInOtherRepos', { count: hidden }));
   }
   return lines;
 }
@@ -46,6 +51,6 @@ export function listLines(prompts: Prompt[], scope: ListScope): string[] {
 export function resolveRef(prompts: Prompt[], ref: string | undefined, scope: ListScope): Prompt {
   const shown = viewPrompts(prompts, scope);
   const n = Number.parseInt(ref ?? '1', 10);
-  if (!Number.isInteger(n) || n < 1 || n > shown.length) throw new UserError(`no prompt ${ref ?? '1'} (have ${shown.length})`);
+  if (!Number.isInteger(n) || n < 1 || n > shown.length) throw new UserError(t('cli.prompt.noPromptError', { ref: ref ?? '1', count: shown.length }));
   return shown[n - 1]!;
 }
