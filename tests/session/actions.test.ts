@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listEffect, pickerEffect, type ActionContext } from '../../src/session/actions.js';
+import { listEffect, panelData, pickerEffect, type ActionContext } from '../../src/session/actions.js';
 import { Shelves } from '../../src/storage/shelf-store.js';
 import { Store } from '../../src/storage/prompt-store.js';
 
@@ -73,5 +73,37 @@ describe('listEffect', () => {
   it('says so when a shelf is already at the end', async () => {
     const [first] = await ctx.shelves.list();
     expect(await listEffect(ctx, { type: 'move-shelf', shelf: first!, step: -1 }, false)).toEqual({ status: { text: 'already first' } });
+  });
+});
+
+describe('listEffect shelf rename and delete', () => {
+  it('renames a shelf and moves its prompts along, then shows the new tab', async () => {
+    const p = await ctx.store.add({ text: 'idea', agent: 'claude', cwd: '/repo', shelf: 'Ideas' });
+    const effect = await listEffect(ctx, { type: 'rename-shelf', shelf: 'Ideas', newName: 'Later' }, false);
+    expect(effect).toMatchObject({ refresh: true, showShelf: 'Later', status: { text: 'renamed Ideas to Later' } });
+    expect((await ctx.store.list()).find((e) => e.id === p.id)?.shelf).toBe('Later');
+    expect(await ctx.shelves.list()).not.toContain('Ideas');
+  });
+
+  it('renames a shelf that only prompts point at, registering the new name', async () => {
+    await ctx.store.add({ text: 'x', agent: 'claude', cwd: '/repo', shelf: 'Lost' });
+    await listEffect(ctx, { type: 'rename-shelf', shelf: 'lost', newName: 'Found' }, false);
+    expect((await ctx.store.list())[0]!.shelf).toBe('Found');
+    expect(await ctx.shelves.list()).toContain('Found');
+  });
+
+  it('deletes a shelf with its prompts, so it does not come back', async () => {
+    await ctx.store.add({ text: 'a', agent: 'claude', cwd: '/repo', shelf: 'Ideas' });
+    await ctx.store.add({ text: 'draft', agent: 'claude', cwd: '/repo' });
+    const effect = await listEffect(ctx, { type: 'delete-shelf', shelf: 'Ideas' }, false);
+    expect(effect.status).toEqual({ text: 'deleted shelf Ideas and its 1 prompt' });
+    expect((await panelData(ctx)).shelves).not.toContain('Ideas');
+    expect((await ctx.store.list()).map((e) => e.text)).toEqual(['draft']);
+  });
+
+  it('deletes a shelf that only prompts point at', async () => {
+    await ctx.store.add({ text: 'x', agent: 'claude', cwd: '/repo', shelf: 'Lost' });
+    await listEffect(ctx, { type: 'delete-shelf', shelf: 'Lost' }, false);
+    expect((await panelData(ctx)).shelves).not.toContain('Lost');
   });
 });

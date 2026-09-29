@@ -57,8 +57,7 @@ export class Store {
       }
     }
 
-    for (let i = startIdx; i < lines.length; i++) {
-      const line = lines[i];
+    for (const line of lines.slice(startIdx)) {
       if (!line.trim()) continue;
       let parsed: unknown;
       try {

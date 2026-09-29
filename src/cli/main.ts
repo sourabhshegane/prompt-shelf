@@ -11,7 +11,8 @@ import { parseArgs, type ParsedArgs } from './args.js';
 import { helpText } from './help.js';
 import { describeRemoved, listLines, resolveRef } from './prompt-commands.js';
 import { doctorLines, runHotkeyCommand } from './setup-commands.js';
-import { requireShelf, runShelfCommand, shelfLines } from './shelf-commands.js';
+import { requireShelf } from '../storage/shelf-ops.js';
+import { runShelfCommand, shelfLines } from './shelf-commands.js';
 
 const { version } = pkg;
 

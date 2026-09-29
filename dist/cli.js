@@ -285,8 +285,7 @@ var Store = class {
         else throw err;
       }
     }
-    for (let i = startIdx; i < lines.length; i++) {
-      const line = lines[i];
+    for (const line of lines.slice(startIdx)) {
       if (!line.trim()) continue;
       let parsed;
       try {
@@ -951,7 +950,6 @@ var en = {
   "actions.alreadyLast": "already last",
   "actions.starredShelf": "starred {shelf}",
   "actions.unstarredShelf": "unstarred {shelf}",
-  "actions.renameShelf": "renaming {shelf}\u2026",
   // List panel
   "list.noSkillsFor": "no skills found for {agent} here",
   "list.emptyShelf": "{name} is empty \u2014 on the stash tab press s on a draft to save it here",
@@ -962,6 +960,10 @@ var en = {
   "list.deleteNo": "no",
   "list.filterDone": "enter done \xB7 esc clear",
   "list.newShelfHint": "enter create \xB7 esc cancel",
+  "list.renameShelfLabel": "rename shelf:",
+  "list.renameShelfHint": "enter rename \xB7 esc cancel",
+  "list.deleteShelf": "delete {name}?",
+  "list.deleteShelfWithPrompts": "delete {name} and its {count}?",
   "list.pickShelfHint": "\u2190\u2192 choose \xB7 enter save \xB7 n new shelf \xB7 esc cancel",
   "list.saveToShelf": "save to shelf:",
   "list.noMatches": "no matches for /{query}",
@@ -998,6 +1000,10 @@ var en = {
   "list.key.scopeToAll": "this repo \u2192 all repos",
   "list.key.scopeToRepo": "all repos \u2192 this repo",
   "list.key.delete": "delete",
+  "list.key.rename": "rename",
+  "list.key.renameShelf": "rename this shelf",
+  "list.key.deleteShelf": "delete this shelf and its prompts",
+  "list.key.deleteShelfShort": "delete shelf",
   "list.key.filter": "search this list",
   "list.key.esc": "close the list",
   "list.sortLabel_newest": "newest first",
@@ -1273,7 +1279,10 @@ function choiceRow(labels, active, width, style = (l) => l) {
   return truncateLine(`${from > 0 ? "\u2039" : " "}${parts.join(" ")}`, width);
 }
 var TextInput = class {
-  value = "";
+  constructor(value = "") {
+    this.value = value;
+  }
+  value;
   /** Returns 'done' on Enter, 'cancel' on Esc / Ctrl+C, and 'editing' otherwise. */
   handle(key) {
     if (key === "\r") return "done";
@@ -1323,11 +1332,6 @@ var ListPanel = class {
   // Saving a prompt to a shelf: which prompt, which shelf is picked, and a new shelf's name.
   saving;
   target = 0;
-  // For renaming a shelf: the old shelf name
-  renamingShelf;
-  // For deleting a shelf: the shelf being deleted and its prompt count
-  deletingShelf;
-  deletingShelfPromptCount = 0;
   nameInput = new TextInput();
   skills;
   agent;
@@ -1412,17 +1416,11 @@ var ListPanel = class {
       this.mode = "list";
       return key === "y" && prompt ? { type: "delete", prompt } : { type: "none" };
     }
+    const tab = this.tab;
     if (this.mode === "confirm-delete-shelf") {
       this.mode = "list";
-      if (key === "y" && this.deletingShelf) {
-        const shelf = this.deletingShelf;
-        this.deletingShelf = void 0;
-        return { type: "delete-shelf", shelf };
-      }
-      this.deletingShelf = void 0;
-      return { type: "none" };
+      return key === "y" && tab.kind === "shelf" ? { type: "delete-shelf", shelf: tab.name } : { type: "none" };
     }
-    const tab = this.tab;
     switch (key) {
       case "\x1B[A":
       case "k":
@@ -1448,18 +1446,13 @@ var ListPanel = class {
         if (prompt) this.startSaving(prompt);
         return { type: "none" };
       case "d":
-        if (tab.kind === "shelf") {
-          const count = this.prompts.filter((p) => p.shelf?.toLowerCase() === tab.name.toLowerCase()).length;
-          this.deletingShelf = tab.name;
-          this.deletingShelfPromptCount = count;
-          this.mode = "confirm-delete-shelf";
-        } else if (prompt) {
-          this.mode = "confirm-delete";
-        }
+        if (prompt) this.mode = "confirm-delete";
+        return { type: "none" };
+      case "D":
+        if (tab.kind === "shelf") this.mode = "confirm-delete-shelf";
         return { type: "none" };
       case "r":
         if (tab.kind === "shelf") {
-          this.renamingShelf = tab.name;
           this.nameInput = new TextInput(tab.name);
           this.mode = "rename-shelf";
         }
@@ -1534,7 +1527,9 @@ var ListPanel = class {
       case "confirm-delete":
         return ` ${ansi.bold}${theme.error}${t("list.deletePrompt")}${ansi.reset}  ${keyHints([["y", t("list.deleteYes")], ["n", t("list.deleteNo")]])}`;
       case "confirm-delete-shelf": {
-        const msg = this.deletingShelfPromptCount > 0 ? `${this.deletingShelf} has ${this.deletingShelfPromptCount} prompt${this.deletingShelfPromptCount === 1 ? "" : "s"} \u2014 delete anyway?` : `delete ${this.deletingShelf}?`;
+        const name = this.tab.kind === "shelf" ? this.tab.name : "";
+        const count = this.prompts.filter(onShelf(name)).length;
+        const msg = count ? t("list.deleteShelfWithPrompts", { name, count: tn("cli.shelf.pluralPrompts", count, { count }) }) : t("list.deleteShelf", { name });
         return ` ${ansi.bold}${theme.error}${msg}${ansi.reset}  ${keyHints([["y", t("list.deleteYes")], ["n", t("list.deleteNo")]])}`;
       }
       case "help":
@@ -1544,7 +1539,7 @@ var ListPanel = class {
       case "new-shelf":
         return this.nameInput.render("new shelf name:", t("list.newShelfHint"));
       case "rename-shelf":
-        return this.nameInput.render("new shelf name:", t("list.newShelfHint"));
+        return this.nameInput.render(t("list.renameShelfLabel"), t("list.renameShelfHint"));
       case "pick-shelf": {
         const hint = `   ${t("list.pickShelfHint")}`;
         const label = ` ${t("list.saveToShelf")}`;
@@ -1553,10 +1548,9 @@ var ListPanel = class {
       }
     }
     if (this.tab.kind === "skills") return keyHints([["enter", t("list.key.useSkill", { agent: this.agent })], ["/", t("list.key.search")], ["?", t("list.key.moreKeys")], ["esc", t("list.key.closeList")]]);
-    if (this.tab.kind === "shelf") {
-      return keyHints([["enter", t("list.key.usePrompt")], ["s", t("list.key.movePrompt")], ["r", "rename"], ["d", "delete"], ["/", t("list.key.filter")], ["?", t("list.key.moreKeys")], ["esc", t("list.key.esc")]]);
-    }
-    return keyHints([["enter", t("list.key.usePrompt")], ["s", t("list.key.saveDraft")], ["/", t("list.key.filter")], ["?", t("list.key.moreKeys")], ["esc", t("list.key.esc")]]);
+    const shelfKeys = this.tab.kind === "shelf" ? [["r", t("list.key.rename")], ["D", t("list.key.deleteShelfShort")]] : [];
+    const save = this.tab.kind === "shelf" ? ["s", t("list.key.movePrompt")] : ["s", t("list.key.saveDraft")];
+    return keyHints([["enter", t("list.key.usePrompt")], save, ...shelfKeys, ["/", t("list.key.filter")], ["?", t("list.key.moreKeys")], ["esc", t("list.key.esc")]]);
   }
   helpLines() {
     const tab = this.tab;
@@ -1582,10 +1576,10 @@ var ListPanel = class {
           ["o", t("list.key.sortNext", { next: SORT_LABEL(nextSort(this.sortOrder)) })],
           ["*", star],
           ["<  >", t("list.key.moveShelfLR")],
-          ["r", "rename this shelf"],
-          ["d", "delete this shelf"]
+          ["r", t("list.key.renameShelf")],
+          ["D", t("list.key.deleteShelf")]
         ] : [["tab", t("list.key.scopeToggle", { change: scopeChange })]],
-        ...shelf ? [] : [["d", t("list.key.delete")]],
+        ["d", t("list.key.delete")],
         ["/", t("list.key.filter")],
         ["esc", t("list.key.esc")]
       ];
@@ -1677,13 +1671,11 @@ var ListPanel = class {
   handleRenameKey(key) {
     const state = this.nameInput.handle(key);
     if (state === "editing") return { type: "none" };
-    const oldShelf = this.renamingShelf;
     this.mode = "list";
-    this.renamingShelf = void 0;
+    const tab = this.tab;
     const name = this.nameInput.value.trim();
-    if (state === "cancel" || !name || !oldShelf) return { type: "none" };
-    if (name === oldShelf) return { type: "none" };
-    return { type: "rename-shelf", shelf: oldShelf, newName: name };
+    if (state === "cancel" || !name || tab.kind !== "shelf" || name === tab.name) return { type: "none" };
+    return { type: "rename-shelf", shelf: tab.name, newName: name };
   }
   handleFilterKey(key) {
     if (key === "\r") this.mode = "list";
@@ -1754,9 +1746,6 @@ var SavePicker = class {
       case "n":
         this.naming = new TextInput();
         return { type: "none" };
-      case "d":
-        if (this.index > 0) return { type: "delete-shelf", shelf: this.shelves[this.index - 1] };
-        return { type: "none" };
       case "\x1B":
       case "":
         return { type: "cancel" };
@@ -1772,15 +1761,35 @@ var SavePicker = class {
     let footer;
     if (status) footer = statusLine(status);
     else if (this.naming) footer = this.naming.render("new shelf name:", "enter create \xB7 esc back");
-    else {
-      const hints = [["\u2190\u2192", "choose"], ["enter", "save"], ["n", "new shelf"]];
-      if (this.index > 0) hints.push(["d", "delete"]);
-      hints.push(["esc", "cancel"]);
-      footer = keyHints(hints);
-    }
+    else footer = keyHints([["\u2190\u2192", "choose"], ["enter", "save"], ["n", "new shelf"], ["esc", "cancel"]]);
     return panelFrame([`${ansi.bold}${label}${ansi.reset}${places}${addNew}`, ` ${ansi.dim}${flatten(this.draft)}${ansi.reset}`], footer, cols, rows);
   }
 };
+
+// src/storage/shelf-ops.ts
+var plural = (n) => tn("cli.shelf.pluralPrompts", n, { count: n });
+async function requireShelf(shelves, store, name) {
+  const saved = await shelves.find(name);
+  if (saved) return { name: saved, saved: true };
+  const orphan = findShelf(withOrphans([], await store.list()), name);
+  if (orphan) return { name: orphan, saved: false };
+  throw new UserError(t("cli.shelf.notFoundError", { name }));
+}
+async function renameShelf(shelves, store, name, to) {
+  const current = await requireShelf(shelves, store, name);
+  const renamed = current.saved ? await shelves.rename(current.name, to) : await shelves.create(to);
+  await store.reshelve(current.name, renamed);
+  return { from: current.name, to: renamed };
+}
+async function deleteShelf(shelves, store, name, force) {
+  const current = await requireShelf(shelves, store, name);
+  const count = (await store.list()).filter(onShelf(current.name)).length;
+  if (count && !force) throw new UserError(t("cli.shelf.deleteForce", { name: current.name, count: plural(count) }));
+  await store.reshelve(current.name, null);
+  if (current.saved) await shelves.remove(current.name);
+  return { name: current.name, count };
+}
+var deletedMessage = ({ name, count }) => t("cli.shelf.deletedMsg", { name, count: count ? t("cli.shelf.deletedWithPrompts", { count: plural(count) }) : "" });
 
 // src/session/actions.ts
 async function panelData(ctx) {
@@ -1802,8 +1811,7 @@ async function listEffect(ctx, action, hasDraft) {
     case "use": {
       if (!await ctx.store.markUsed(action.prompt.id)) return gone;
       const key = action.prompt.shelf ? hasDraft ? "actions.appendedShelf" : "actions.keptShelf" : hasDraft ? "actions.appendedKeptStash" : "actions.keptStash";
-      const params = action.prompt.shelf ? { shelf: action.prompt.shelf } : {};
-      return { close: true, insert: action.prompt.text, status: { text: t(key, params) } };
+      return { close: true, insert: action.prompt.text, status: { text: t(key, { shelf: action.prompt.shelf ?? "" }) } };
     }
     case "use-skill":
       return { close: true, insert: ctx.skillPrompt(action.name, hasDraft), status: { text: t("actions.skillInserted", { name: action.name }) } };
@@ -1830,20 +1838,11 @@ async function listEffect(ctx, action, hasDraft) {
       const moved = await ctx.shelves.move(await ctx.shelves.create(action.shelf), action.step);
       return moved ? { refresh: true } : { status: { text: t(action.step < 0 ? "actions.alreadyFirst" : "actions.alreadyLast") } };
     }
-    case "delete-shelf": {
-      const canonicalName = await ctx.shelves.find(action.shelf);
-      if (canonicalName) {
-        await ctx.shelves.remove(canonicalName);
-        return { refresh: true, status: { text: t("cli.shelf.deletedMsg", { name: canonicalName, count: "" }) } };
-      }
-      const count = await ctx.store.reshelve(action.shelf, null);
-      return { refresh: true, status: { text: `deleted ${action.shelf} (${count} prompts moved to stash)` } };
-    }
+    case "delete-shelf":
+      return { refresh: true, status: { text: deletedMessage(await deleteShelf(ctx.shelves, ctx.store, action.shelf, true)) } };
     case "rename-shelf": {
-      const exists = await ctx.shelves.find(action.shelf);
-      if (!exists) return { status: { text: `can't rename orphan shelf "${action.shelf}" \u2014 delete it to move its prompts to stash`, error: true } };
-      const newName = await ctx.shelves.rename(action.shelf, action.newName);
-      return { refresh: true, status: { text: t("cli.shelf.renamedMsg", { old: action.shelf, new: newName }) } };
+      const { from, to } = await renameShelf(ctx.shelves, ctx.store, action.shelf, action.newName);
+      return { refresh: true, showShelf: to, status: { text: t("cli.shelf.renamedMsg", { old: from, new: to }) } };
     }
     case "none":
       return {};
@@ -1852,12 +1851,6 @@ async function listEffect(ctx, action, hasDraft) {
 async function pickerEffect(ctx, action, text) {
   if (action.type === "none") return {};
   if (action.type === "cancel") return { close: true };
-  if (action.type === "delete-shelf") {
-    const count2 = (await ctx.store.list()).filter((p) => p.shelf?.toLowerCase() === action.shelf.toLowerCase()).length;
-    if (count2 > 0) return { status: { text: t("cli.shelf.deleteForce", { name: action.shelf, count: tn("cli.shelf.pluralPrompts", count2, { count: count2 }) }), error: true } };
-    await ctx.shelves.remove(action.shelf);
-    return { refresh: true, status: { text: t("cli.shelf.deletedMsg", { name: action.shelf, count: "" }) } };
-  }
   const shelf = action.type === "create-shelf" ? await ctx.shelves.create(action.name) : action.shelf && await ctx.shelves.create(action.shelf);
   await ctx.store.add({ text, agent: ctx.agent, cwd: ctx.cwd, ...shelf ? { shelf } : {} });
   const count = await draftsLeft(ctx);
@@ -2277,14 +2270,6 @@ function doctorLines(version2) {
 }
 
 // src/cli/shelf-commands.ts
-var plural = (n) => tn("cli.shelf.pluralPrompts", n, { count: n });
-async function requireShelf(shelves, store, name) {
-  const saved = await shelves.find(name);
-  if (saved) return { name: saved, saved: true };
-  const orphan = findShelf(withOrphans([], await store.list()), name);
-  if (orphan) return { name: orphan, saved: false };
-  throw new UserError(t("cli.shelf.notFoundError", { name }));
-}
 async function shelfLines(shelves, store) {
   const prompts = await store.list();
   const starred = await shelves.starred();
@@ -2295,24 +2280,18 @@ async function runShelfCommand(cmd, shelves, store) {
   const rename2 = cmd.action === "rename" ? " <new name>" : "";
   if (!first) throw new UserError(t("cli.shelf.usageError", { action: cmd.action, rename: rename2 }), 2);
   if (cmd.action === "new") return t("cli.shelf.readyMsg", { name: await shelves.create(first) });
-  const current = await requireShelf(shelves, store, first);
   if (cmd.action === "star") {
+    const current = await requireShelf(shelves, store, first);
     if (!current.saved) await shelves.create(current.name);
     const starred = await shelves.toggleStar(current.name);
     return starred ? t("cli.shelf.starredMsg", { name: current.name }) : t("cli.shelf.unstarredMsg", { name: current.name });
   }
   if (cmd.action === "rename") {
     if (!second) throw new UserError(t("cli.shelf.usageRenameError"), 2);
-    const renamed = current.saved ? await shelves.rename(current.name, second) : await shelves.create(second);
-    await store.reshelve(current.name, renamed);
-    return t("cli.shelf.renamedMsg", { old: current.name, new: renamed });
+    const { from, to } = await renameShelf(shelves, store, first, second);
+    return t("cli.shelf.renamedMsg", { old: from, new: to });
   }
-  const count = (await store.list()).filter(onShelf(current.name)).length;
-  if (count && !cmd.force) throw new UserError(t("cli.shelf.deleteForce", { name: current.name, count: plural(count) }));
-  await store.reshelve(current.name, null);
-  if (current.saved) await shelves.remove(current.name);
-  const countMsg = count ? t("cli.shelf.deletedWithPrompts", { count: plural(count) }) : "";
-  return t("cli.shelf.deletedMsg", { name: current.name, count: countMsg });
+  return deletedMessage(await deleteShelf(shelves, store, first, cmd.force));
 }
 
 // src/cli/main.ts

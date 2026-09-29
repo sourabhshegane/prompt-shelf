@@ -26,7 +26,7 @@ export function choiceRow(labels: string[], active: number, width: number, style
 
 /** A one-line text field, e.g. for a new shelf's name. */
 export class TextInput {
-  value = '';
+  constructor(public value = '') {}
 
   /** Returns 'done' on Enter, 'cancel' on Esc / Ctrl+C, and 'editing' otherwise. */
   handle(key: string): 'done' | 'cancel' | 'editing' {

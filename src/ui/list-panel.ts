@@ -3,7 +3,7 @@ import { isStashDraft, nextSort, onShelf, sortSaved, type Prompt, type SortOrder
 import { scoped, type Scope } from '../domain/scope.js';
 import type { Skill } from '../domain/skill.js';
 import { ago } from '../domain/time.js';
-import { t } from '../i18n/index.js';
+import { t, tn } from '../i18n/index.js';
 import { ansi, theme } from '../terminal/ansi.js';
 import { splitKeys } from '../terminal/keys.js';
 import { clip, flatten, padCells, visibleWidth } from '../terminal/text.js';
@@ -79,11 +79,6 @@ export class ListPanel implements Panel<ListAction> {
   // Saving a prompt to a shelf: which prompt, which shelf is picked, and a new shelf's name.
   private saving: Prompt | undefined;
   private target = 0;
-  // For renaming a shelf: the old shelf name
-  private renamingShelf: string | undefined;
-  // For deleting a shelf: the shelf being deleted and its prompt count
-  private deletingShelf: string | undefined;
-  private deletingShelfPromptCount: number = 0;
   private nameInput = new TextInput();
   private readonly skills: Skill[];
   private readonly agent: string;
@@ -181,17 +176,11 @@ export class ListPanel implements Panel<ListAction> {
       this.mode = 'list';
       return key === 'y' && prompt ? { type: 'delete', prompt } : { type: 'none' };
     }
+    const tab = this.tab;
     if (this.mode === 'confirm-delete-shelf') {
       this.mode = 'list';
-      if (key === 'y' && this.deletingShelf) {
-        const shelf = this.deletingShelf;
-        this.deletingShelf = undefined;
-        return { type: 'delete-shelf', shelf };
-      }
-      this.deletingShelf = undefined;
-      return { type: 'none' };
+      return key === 'y' && tab.kind === 'shelf' ? { type: 'delete-shelf', shelf: tab.name } : { type: 'none' };
     }
-    const tab = this.tab;
     switch (key) {
       case '\x1b[A':
       case 'k':
@@ -218,20 +207,13 @@ export class ListPanel implements Panel<ListAction> {
         if (prompt) this.startSaving(prompt);
         return { type: 'none' };
       case 'd':
-        // Delete shelf if on a shelf tab, otherwise delete the prompt
-        if (tab.kind === 'shelf') {
-          const count = this.prompts.filter((p) => p.shelf?.toLowerCase() === tab.name.toLowerCase()).length;
-          this.deletingShelf = tab.name;
-          this.deletingShelfPromptCount = count;
-          this.mode = 'confirm-delete-shelf';
-        } else if (prompt) {
-          this.mode = 'confirm-delete';
-        }
+        if (prompt) this.mode = 'confirm-delete';
+        return { type: 'none' };
+      case 'D':
+        if (tab.kind === 'shelf') this.mode = 'confirm-delete-shelf';
         return { type: 'none' };
       case 'r':
-        // Rename shelf if on a shelf tab
         if (tab.kind === 'shelf') {
-          this.renamingShelf = tab.name;
           this.nameInput = new TextInput(tab.name);
           this.mode = 'rename-shelf';
         }
@@ -310,9 +292,9 @@ export class ListPanel implements Panel<ListAction> {
       case 'confirm-delete':
         return ` ${ansi.bold}${theme.error}${t('list.deletePrompt')}${ansi.reset}  ${keyHints([['y', t('list.deleteYes')], ['n', t('list.deleteNo')]])}`;
       case 'confirm-delete-shelf': {
-        const msg = this.deletingShelfPromptCount > 0
-          ? `${this.deletingShelf} has ${this.deletingShelfPromptCount} prompt${this.deletingShelfPromptCount === 1 ? '' : 's'} — delete anyway?`
-          : `delete ${this.deletingShelf}?`;
+        const name = this.tab.kind === 'shelf' ? this.tab.name : '';
+        const count = this.prompts.filter(onShelf(name)).length;
+        const msg = count ? t('list.deleteShelfWithPrompts', { name, count: tn('cli.shelf.pluralPrompts', count, { count }) }) : t('list.deleteShelf', { name });
         return ` ${ansi.bold}${theme.error}${msg}${ansi.reset}  ${keyHints([['y', t('list.deleteYes')], ['n', t('list.deleteNo')]])}`;
       }
       case 'help':
@@ -322,7 +304,7 @@ export class ListPanel implements Panel<ListAction> {
       case 'new-shelf':
         return this.nameInput.render('new shelf name:', t('list.newShelfHint'));
       case 'rename-shelf':
-        return this.nameInput.render('new shelf name:', t('list.newShelfHint'));
+        return this.nameInput.render(t('list.renameShelfLabel'), t('list.renameShelfHint'));
       case 'pick-shelf': {
         const hint = `   ${t('list.pickShelfHint')}`;
         const label = ` ${t('list.saveToShelf')}`;
@@ -331,10 +313,9 @@ export class ListPanel implements Panel<ListAction> {
       }
     }
     if (this.tab.kind === 'skills') return keyHints([['enter', t('list.key.useSkill', { agent: this.agent })], ['/', t('list.key.search')], ['?', t('list.key.moreKeys')], ['esc', t('list.key.closeList')]]);
-    if (this.tab.kind === 'shelf') {
-      return keyHints([['enter', t('list.key.usePrompt')], ['s', t('list.key.movePrompt')], ['r', 'rename'], ['d', 'delete'], ['/', t('list.key.filter')], ['?', t('list.key.moreKeys')], ['esc', t('list.key.esc')]]);
-    }
-    return keyHints([['enter', t('list.key.usePrompt')], ['s', t('list.key.saveDraft')], ['/', t('list.key.filter')], ['?', t('list.key.moreKeys')], ['esc', t('list.key.esc')]]);
+    const shelfKeys: [string, string][] = this.tab.kind === 'shelf' ? [['r', t('list.key.rename')], ['D', t('list.key.deleteShelfShort')]] : [];
+    const save: [string, string] = this.tab.kind === 'shelf' ? ['s', t('list.key.movePrompt')] : ['s', t('list.key.saveDraft')];
+    return keyHints([['enter', t('list.key.usePrompt')], save, ...shelfKeys, ['/', t('list.key.filter')], ['?', t('list.key.moreKeys')], ['esc', t('list.key.esc')]]);
   }
 
   private helpLines(): string[] {
@@ -362,11 +343,11 @@ export class ListPanel implements Panel<ListAction> {
               ['o', t('list.key.sortNext', { next: SORT_LABEL(nextSort(this.sortOrder)) })],
               ['*', star],
               ['<  >', t('list.key.moveShelfLR')],
-              ['r', 'rename this shelf'],
-              ['d', 'delete this shelf'],
+              ['r', t('list.key.renameShelf')],
+              ['D', t('list.key.deleteShelf')],
             ] as [string, string][])
           : ([['tab', t('list.key.scopeToggle', { change: scopeChange })]] as [string, string][])),
-        ...(shelf ? [] : [['d', t('list.key.delete')]]),
+        ['d', t('list.key.delete')],
         ['/', t('list.key.filter')],
         ['esc', t('list.key.esc')],
       ];
@@ -470,13 +451,11 @@ export class ListPanel implements Panel<ListAction> {
   private handleRenameKey(key: string): ListAction {
     const state = this.nameInput.handle(key);
     if (state === 'editing') return { type: 'none' };
-    const oldShelf = this.renamingShelf;
     this.mode = 'list';
-    this.renamingShelf = undefined;
+    const tab = this.tab;
     const name = this.nameInput.value.trim();
-    if (state === 'cancel' || !name || !oldShelf) return { type: 'none' };
-    if (name === oldShelf) return { type: 'none' };
-    return { type: 'rename-shelf', shelf: oldShelf, newName: name };
+    if (state === 'cancel' || !name || tab.kind !== 'shelf' || name === tab.name) return { type: 'none' };
+    return { type: 'rename-shelf', shelf: tab.name, newName: name };
   }
 
   private handleFilterKey(key: string): ListAction {

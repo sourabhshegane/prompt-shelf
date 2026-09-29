@@ -1,7 +1,8 @@
 import { isStashDraft, type Prompt } from '../domain/prompt.js';
 import { withOrphans } from '../domain/shelf.js';
-import { t, tn } from '../i18n/index.js';
+import { t } from '../i18n/index.js';
 import type { Store } from '../storage/prompt-store.js';
+import { deletedMessage, deleteShelf, renameShelf } from '../storage/shelf-ops.js';
 import type { Shelves } from '../storage/shelf-store.js';
 import type { ListAction } from '../ui/list-panel.js';
 import type { PickerAction } from '../ui/save-picker.js';
@@ -58,8 +59,7 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
       const key = action.prompt.shelf
         ? (hasDraft ? 'actions.appendedShelf' : 'actions.keptShelf')
         : (hasDraft ? 'actions.appendedKeptStash' : 'actions.keptStash');
-      const params = action.prompt.shelf ? { shelf: action.prompt.shelf } : {};
-      return { close: true, insert: action.prompt.text, status: { text: t(key, params) } };
+      return { close: true, insert: action.prompt.text, status: { text: t(key, { shelf: action.prompt.shelf ?? '' }) } };
     }
     case 'use-skill':
       return { close: true, insert: ctx.skillPrompt(action.name, hasDraft), status: { text: t('actions.skillInserted', { name: action.name }) } };
@@ -87,26 +87,12 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
       const moved = await ctx.shelves.move(await ctx.shelves.create(action.shelf), action.step);
       return moved ? { refresh: true } : { status: { text: t(action.step < 0 ? 'actions.alreadyFirst' : 'actions.alreadyLast') } };
     }
-    case 'delete-shelf': {
-      // Confirmation is handled in the UI
-      // Check if shelf exists and use its canonical name, or if it's an orphan, just remove its prompts
-      const canonicalName = await ctx.shelves.find(action.shelf);
-      if (canonicalName) {
-        // Shelf exists in shelves file, delete it normally
-        await ctx.shelves.remove(canonicalName);
-        return { refresh: true, status: { text: t('cli.shelf.deletedMsg', { name: canonicalName, count: '' }) } };
-      }
-      // Shelf is an orphan (prompts point to it but it doesn't exist in shelves file)
-      // Just remove its prompts by moving them to stash
-      const count = await ctx.store.reshelve(action.shelf, null);
-      return { refresh: true, status: { text: `deleted ${action.shelf} (${count} prompts moved to stash)` } };
-    }
+    case 'delete-shelf':
+      // The panel already asked; the prompts on the shelf go with it.
+      return { refresh: true, status: { text: deletedMessage(await deleteShelf(ctx.shelves, ctx.store, action.shelf, true)) } };
     case 'rename-shelf': {
-      // Check if shelf exists first (orphan shelves can't be renamed)
-      const exists = await ctx.shelves.find(action.shelf);
-      if (!exists) return { status: { text: `can't rename orphan shelf "${action.shelf}" — delete it to move its prompts to stash`, error: true } };
-      const newName = await ctx.shelves.rename(action.shelf, action.newName);
-      return { refresh: true, status: { text: t('cli.shelf.renamedMsg', { old: action.shelf, new: newName }) } };
+      const { from, to } = await renameShelf(ctx.shelves, ctx.store, action.shelf, action.newName);
+      return { refresh: true, showShelf: to, status: { text: t('cli.shelf.renamedMsg', { old: from, new: to }) } };
     }
     case 'none':
       return {};
@@ -117,12 +103,6 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
 export async function pickerEffect(ctx: ActionContext, action: PickerAction, text: string): Promise<Effect> {
   if (action.type === 'none') return {};
   if (action.type === 'cancel') return { close: true };
-  if (action.type === 'delete-shelf') {
-    const count = (await ctx.store.list()).filter((p) => p.shelf?.toLowerCase() === action.shelf.toLowerCase()).length;
-    if (count > 0) return { status: { text: t('cli.shelf.deleteForce', { name: action.shelf, count: tn('cli.shelf.pluralPrompts', count, { count }) }), error: true } };
-    await ctx.shelves.remove(action.shelf);
-    return { refresh: true, status: { text: t('cli.shelf.deletedMsg', { name: action.shelf, count: '' }) } };
-  }
   const shelf = action.type === 'create-shelf' ? await ctx.shelves.create(action.name) : action.shelf && (await ctx.shelves.create(action.shelf));
   await ctx.store.add({ text, agent: ctx.agent, cwd: ctx.cwd, ...(shelf ? { shelf } : {}) });
   const count = await draftsLeft(ctx);
