@@ -18,7 +18,12 @@ describe('Shelves', () => {
     await shelves.create('  Git   tips ');
     await shelves.remove('Ideas');
     expect(await shelves.list()).toEqual(['To explore', 'Common', 'Git tips']);
-    expect(JSON.parse(await readFile(join(dir, 'shelves.json'), 'utf8'))).toEqual({ version: 1, shelves: ['To explore', 'Common', 'Git tips'], starred: [] });
+    const file = JSON.parse(await readFile(join(dir, 'shelves.json'), 'utf8'));
+    expect(file.version).toBe(2);
+    expect(file.starred).toEqual([]);
+    expect(file.shelves).toHaveLength(3);
+    expect(file.shelves.map((s: any) => s.name)).toEqual(['To explore', 'Common', 'Git tips']);
+    expect(file.shelves.every((s: any) => typeof s.id === 'string' && s.id.length > 0)).toBe(true);
   });
 
   it('never brings the defaults back once the user has removed them all', async () => {

@@ -7,15 +7,22 @@ export interface Prompt {
   agent: string;
   cwd: string;
   createdAt: string;
-  /** The shelf this prompt is saved on; absent for stash drafts. */
+  /** The shelf ID this prompt is saved on; absent for stash drafts. */
+  shelfId?: string;
+  /** The shelf name (deprecated, kept for v1 backward compat; shelfId takes precedence). */
   shelf?: string;
   /** How many times the prompt was put in the box while keeping it (shelf prompts, `a` on a draft). */
   usedCount?: number;
   lastUsedAt?: string;
 }
 
-export const isStashDraft = (p: Prompt): boolean => p.shelf === undefined;
-export const onShelf = (name: string) => (p: Prompt): boolean => p.shelf?.toLowerCase() === name.toLowerCase();
+export const isStashDraft = (p: Prompt): boolean => !p.shelfId && !p.shelf;
+export const onShelfId = (id: string) => (p: Prompt): boolean => p.shelfId === id;
+export const onShelf = (nameOrId: string) => (p: Prompt): boolean => {
+  // Try shelfId first (new format), fall back to shelf name (v1 format)
+  if (p.shelfId === nameOrId) return true;
+  return p.shelf?.toLowerCase() === nameOrId.toLowerCase();
+};
 
 /** How a shelf is ordered. The stash is always newest first. */
 export type SortOrder = 'newest' | 'most-used' | 'recent';

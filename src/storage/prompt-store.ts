@@ -23,6 +23,7 @@ const isPrompt = (value: unknown): value is Prompt => {
     typeof v === 'object' &&
     v !== null &&
     ['id', 'text', 'agent', 'cwd', 'createdAt'].every((k) => typeof v[k] === 'string') &&
+    (v.shelfId === undefined || typeof v.shelfId === 'string') &&
     (v.shelf === undefined || typeof v.shelf === 'string')
   );
 };

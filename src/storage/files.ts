@@ -1,4 +1,4 @@
-import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile, fsync } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { debug } from '../debug.js';
@@ -14,14 +14,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /**
  * Runs `fn` while holding `<file>.lock`, so read-modify-write cycles from several sessions (and
  * several key presses in one session) never interleave and lose each other's changes.
+ * Lock file contains the process ID and a token for safer stale detection.
  */
 export async function withFileLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
   const lock = `${file}.lock`;
+  const lockToken = `${process.pid}-${randomUUID()}`;
   await mkdir(dirname(file), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   for (;;) {
     try {
-      await (await open(lock, 'wx')).close();
+      const handle = await open(lock, 'wx');
+      await handle.writeFile(lockToken);
+      await handle.close();
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
@@ -37,15 +41,32 @@ export async function withFileLock<T>(file: string, fn: () => Promise<T>): Promi
   try {
     return await fn();
   } finally {
-    await rm(lock, { force: true });
+    // Only remove our own lock (check token matches)
+    try {
+      const content = await readTextIfExists(lock);
+      if (content === lockToken) await rm(lock, { force: true });
+    } catch {
+      // If we can't read or remove, let stale detection handle it next time
+    }
   }
 }
 
-/** Writes through a uniquely named temp file and a rename, so readers never see half a file. Sets 0600 permissions. */
+/** Writes through a uniquely named temp file and a rename, so readers never see half a file. Sets 0600 permissions and fsyncs for durability. */
 export async function writeFileAtomic(file: string, content: string): Promise<void> {
   await mkdir(dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(tmp, content, 'utf8');
+  const fd = await open(tmp, 'w');
+  try {
+    await fd.writeFile(content, 'utf8');
+    // Fsync to ensure data is written to disk before rename
+    try {
+      await fsync(fd.fd);
+    } catch {
+      // If fsync fails, continue anyway; rename is what matters most
+    }
+  } finally {
+    await fd.close();
+  }
   // Set permissions before rename so the new file is never world-readable
   try {
     await chmod(tmp, 0o600);
