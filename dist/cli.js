@@ -951,6 +951,7 @@ var en = {
   "actions.alreadyLast": "already last",
   "actions.starredShelf": "starred {shelf}",
   "actions.unstarredShelf": "unstarred {shelf}",
+  "actions.renameShelf": "renaming {shelf}\u2026",
   // List panel
   "list.noSkillsFor": "no skills found for {agent} here",
   "list.emptyShelf": "{name} is empty \u2014 on the stash tab press s on a draft to save it here",
@@ -1322,6 +1323,11 @@ var ListPanel = class {
   // Saving a prompt to a shelf: which prompt, which shelf is picked, and a new shelf's name.
   saving;
   target = 0;
+  // For renaming a shelf: the old shelf name
+  renamingShelf;
+  // For deleting a shelf: the shelf being deleted and its prompt count
+  deletingShelf;
+  deletingShelfPromptCount = 0;
   nameInput = new TextInput();
   skills;
   agent;
@@ -1395,6 +1401,7 @@ var ListPanel = class {
     if (this.mode === "filter") return this.handleFilterKey(key);
     if (this.mode === "pick-shelf") return this.handlePickKey(key);
     if (this.mode === "new-shelf") return this.handleNameKey(key);
+    if (this.mode === "rename-shelf") return this.handleRenameKey(key);
     if (this.mode === "help") {
       this.mode = "list";
       return { type: "none" };
@@ -1404,6 +1411,16 @@ var ListPanel = class {
     if (this.mode === "confirm-delete") {
       this.mode = "list";
       return key === "y" && prompt ? { type: "delete", prompt } : { type: "none" };
+    }
+    if (this.mode === "confirm-delete-shelf") {
+      this.mode = "list";
+      if (key === "y" && this.deletingShelf) {
+        const shelf = this.deletingShelf;
+        this.deletingShelf = void 0;
+        return { type: "delete-shelf", shelf };
+      }
+      this.deletingShelf = void 0;
+      return { type: "none" };
     }
     const tab = this.tab;
     switch (key) {
@@ -1431,7 +1448,21 @@ var ListPanel = class {
         if (prompt) this.startSaving(prompt);
         return { type: "none" };
       case "d":
-        if (prompt) this.mode = "confirm-delete";
+        if (tab.kind === "shelf") {
+          const count = this.prompts.filter((p) => p.shelf?.toLowerCase() === tab.name.toLowerCase()).length;
+          this.deletingShelf = tab.name;
+          this.deletingShelfPromptCount = count;
+          this.mode = "confirm-delete-shelf";
+        } else if (prompt) {
+          this.mode = "confirm-delete";
+        }
+        return { type: "none" };
+      case "r":
+        if (tab.kind === "shelf") {
+          this.renamingShelf = tab.name;
+          this.nameInput = new TextInput(tab.name);
+          this.mode = "rename-shelf";
+        }
         return { type: "none" };
       case "n":
         this.saving = void 0;
@@ -1502,11 +1533,17 @@ var ListPanel = class {
     switch (this.mode) {
       case "confirm-delete":
         return ` ${ansi.bold}${theme.error}${t("list.deletePrompt")}${ansi.reset}  ${keyHints([["y", t("list.deleteYes")], ["n", t("list.deleteNo")]])}`;
+      case "confirm-delete-shelf": {
+        const msg = this.deletingShelfPromptCount > 0 ? `${this.deletingShelf} has ${this.deletingShelfPromptCount} prompt${this.deletingShelfPromptCount === 1 ? "" : "s"} \u2014 delete anyway?` : `delete ${this.deletingShelf}?`;
+        return ` ${ansi.bold}${theme.error}${msg}${ansi.reset}  ${keyHints([["y", t("list.deleteYes")], ["n", t("list.deleteNo")]])}`;
+      }
       case "help":
         return keyHints([["any key", "back"]]);
       case "filter":
         return ` ${ansi.bold}/ ${this.filterText}\u258F${ansi.reset}${ansi.dim}   ${t("list.filterDone")}${ansi.reset}`;
       case "new-shelf":
+        return this.nameInput.render("new shelf name:", t("list.newShelfHint"));
+      case "rename-shelf":
         return this.nameInput.render("new shelf name:", t("list.newShelfHint"));
       case "pick-shelf": {
         const hint = `   ${t("list.pickShelfHint")}`;
@@ -1516,8 +1553,10 @@ var ListPanel = class {
       }
     }
     if (this.tab.kind === "skills") return keyHints([["enter", t("list.key.useSkill", { agent: this.agent })], ["/", t("list.key.search")], ["?", t("list.key.moreKeys")], ["esc", t("list.key.closeList")]]);
-    const save = this.tab.kind === "shelf" ? ["s", t("list.key.movePrompt")] : ["s", t("list.key.saveDraft")];
-    return keyHints([["enter", t("list.key.usePrompt")], save, ["/", t("list.key.filter")], ["?", t("list.key.moreKeys")], ["esc", t("list.key.esc")]]);
+    if (this.tab.kind === "shelf") {
+      return keyHints([["enter", t("list.key.usePrompt")], ["s", t("list.key.movePrompt")], ["r", "rename"], ["d", "delete"], ["/", t("list.key.filter")], ["?", t("list.key.moreKeys")], ["esc", t("list.key.esc")]]);
+    }
+    return keyHints([["enter", t("list.key.usePrompt")], ["s", t("list.key.saveDraft")], ["/", t("list.key.filter")], ["?", t("list.key.moreKeys")], ["esc", t("list.key.esc")]]);
   }
   helpLines() {
     const tab = this.tab;
@@ -1542,9 +1581,11 @@ var ListPanel = class {
         ...shelf ? [
           ["o", t("list.key.sortNext", { next: SORT_LABEL(nextSort(this.sortOrder)) })],
           ["*", star],
-          ["<  >", t("list.key.moveShelfLR")]
+          ["<  >", t("list.key.moveShelfLR")],
+          ["r", "rename this shelf"],
+          ["d", "delete this shelf"]
         ] : [["tab", t("list.key.scopeToggle", { change: scopeChange })]],
-        ["d", t("list.key.delete")],
+        ...shelf ? [] : [["d", t("list.key.delete")]],
         ["/", t("list.key.filter")],
         ["esc", t("list.key.esc")]
       ];
@@ -1632,6 +1673,17 @@ var ListPanel = class {
     const name = this.nameInput.value.trim();
     if (state === "cancel" || !name) return { type: "none" };
     return { type: "create-shelf", name, ...prompt ? { prompt } : {} };
+  }
+  handleRenameKey(key) {
+    const state = this.nameInput.handle(key);
+    if (state === "editing") return { type: "none" };
+    const oldShelf = this.renamingShelf;
+    this.mode = "list";
+    this.renamingShelf = void 0;
+    const name = this.nameInput.value.trim();
+    if (state === "cancel" || !name || !oldShelf) return { type: "none" };
+    if (name === oldShelf) return { type: "none" };
+    return { type: "rename-shelf", shelf: oldShelf, newName: name };
   }
   handleFilterKey(key) {
     if (key === "\r") this.mode = "list";
@@ -1777,6 +1829,14 @@ async function listEffect(ctx, action, hasDraft) {
     case "move-shelf": {
       const moved = await ctx.shelves.move(await ctx.shelves.create(action.shelf), action.step);
       return moved ? { refresh: true } : { status: { text: t(action.step < 0 ? "actions.alreadyFirst" : "actions.alreadyLast") } };
+    }
+    case "delete-shelf": {
+      await ctx.shelves.remove(action.shelf);
+      return { refresh: true, status: { text: t("cli.shelf.deletedMsg", { name: action.shelf, count: "" }) } };
+    }
+    case "rename-shelf": {
+      const newName = await ctx.shelves.rename(action.shelf, action.newName);
+      return { refresh: true, status: { text: t("cli.shelf.renamedMsg", { old: action.shelf, new: newName }) } };
     }
     case "none":
       return {};

@@ -331,8 +331,10 @@ export class ListPanel implements Panel<ListAction> {
       }
     }
     if (this.tab.kind === 'skills') return keyHints([['enter', t('list.key.useSkill', { agent: this.agent })], ['/', t('list.key.search')], ['?', t('list.key.moreKeys')], ['esc', t('list.key.closeList')]]);
-    const save: [string, string] = this.tab.kind === 'shelf' ? ['s', t('list.key.movePrompt')] : ['s', t('list.key.saveDraft')];
-    return keyHints([['enter', t('list.key.usePrompt')], save, ['/', t('list.key.filter')], ['?', t('list.key.moreKeys')], ['esc', t('list.key.esc')]]);
+    if (this.tab.kind === 'shelf') {
+      return keyHints([['enter', t('list.key.usePrompt')], ['s', t('list.key.movePrompt')], ['r', 'rename'], ['d', 'delete'], ['/', t('list.key.filter')], ['?', t('list.key.moreKeys')], ['esc', t('list.key.esc')]]);
+    }
+    return keyHints([['enter', t('list.key.usePrompt')], ['s', t('list.key.saveDraft')], ['/', t('list.key.filter')], ['?', t('list.key.moreKeys')], ['esc', t('list.key.esc')]]);
   }
 
   private helpLines(): string[] {
