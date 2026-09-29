@@ -102,6 +102,9 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
       return { refresh: true, status: { text: `deleted ${action.shelf} (${count} prompts moved to stash)` } };
     }
     case 'rename-shelf': {
+      // Check if shelf exists first (orphan shelves can't be renamed)
+      const exists = await ctx.shelves.find(action.shelf);
+      if (!exists) return { status: { text: `can't rename orphan shelf "${action.shelf}" — delete it to move its prompts to stash`, error: true } };
       const newName = await ctx.shelves.rename(action.shelf, action.newName);
       return { refresh: true, status: { text: t('cli.shelf.renamedMsg', { old: action.shelf, new: newName }) } };
     }
