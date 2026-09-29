@@ -2,6 +2,20 @@ import { appendFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { onShelf, type Prompt } from '../domain/prompt.js';
 import { readTextIfExists, withFileLock, writeFileAtomic } from './files.js';
+import { UserError } from '../errors.js';
+
+// Version 1: initial format with prompts as JSON lines (no header)
+// Version 2: header line with version field, forward-compatible
+const FILE_VERSION = 2;
+
+interface FileHeader {
+  version: number;
+}
+
+const isFileHeader = (value: unknown): value is FileHeader => {
+  const v = value as Record<string, unknown> | null;
+  return typeof v === 'object' && v !== null && typeof v.version === 'number';
+};
 
 const isPrompt = (value: unknown): value is Prompt => {
   const v = value as Record<string, unknown> | null;
@@ -18,11 +32,32 @@ export class Store {
   constructor(private readonly filePath: string) {}
 
   /** Prompts, oldest first, plus lines that aren't prompts; those are kept verbatim on every rewrite. */
-  private async read(): Promise<{ prompts: Prompt[]; unreadable: string[] }> {
+  private async read(): Promise<{ prompts: Prompt[]; unreadable: string[]; version: number }> {
     const raw = (await readTextIfExists(this.filePath)) ?? '';
     const prompts: Prompt[] = [];
     const unreadable: string[] = [];
-    for (const line of raw.split('\n')) {
+    let version = 1;
+    const lines = raw.split('\n');
+    let startIdx = 0;
+
+    // Check if first line is a header (version 2+)
+    if (lines.length > 0 && lines[0]) {
+      try {
+        const firstParsed = JSON.parse(lines[0]);
+        if (isFileHeader(firstParsed)) {
+          version = firstParsed.version;
+          if (version > FILE_VERSION) throw new UserError(`${this.filePath} is from a newer version (v${version}); upgrade prompt-shelf`);
+          startIdx = 1;
+        }
+      } catch (err) {
+        // If it's not a header, treat as version 1 (prompts start from line 0)
+        if (!(err instanceof UserError)) startIdx = 0;
+        else throw err;
+      }
+    }
+
+    for (let i = startIdx; i < lines.length; i++) {
+      const line = lines[i];
       if (!line.trim()) continue;
       let parsed: unknown;
       try {
@@ -34,7 +69,7 @@ export class Store {
       if (isPrompt(parsed)) prompts.push(parsed);
       else unreadable.push(line);
     }
-    return { prompts, unreadable };
+    return { prompts, unreadable, version };
   }
 
   /** Newest first. */
@@ -45,7 +80,20 @@ export class Store {
   async add(input: { text: string; agent: string; cwd: string; shelf?: string }): Promise<Prompt> {
     const { shelf, ...rest } = input;
     const prompt: Prompt = { id: randomUUID(), createdAt: new Date().toISOString(), ...rest, ...(shelf ? { shelf } : {}) };
-    await withFileLock(this.filePath, () => appendFile(this.filePath, JSON.stringify(prompt) + '\n', 'utf8'));
+    await withFileLock(this.filePath, async () => {
+      // Ensure the file has a header (version 2 format)
+      const raw = (await readTextIfExists(this.filePath)) ?? '';
+      if (!raw || (!raw.includes('"version"') && raw.trim() === '')) {
+        // File is empty or only has prompts (version 1), rewrite with header
+        const { prompts, unreadable } = await this.read();
+        const header = JSON.stringify({ version: FILE_VERSION });
+        const lines = [header, ...unreadable, ...prompts.map((e) => JSON.stringify(e)), JSON.stringify(prompt)];
+        await writeFileAtomic(this.filePath, lines.join('\n') + '\n');
+      } else {
+        // File has header or is a v1 file with content, just append
+        await appendFile(this.filePath, JSON.stringify(prompt) + '\n', 'utf8');
+      }
+    });
     return prompt;
   }
 
@@ -95,7 +143,8 @@ export class Store {
       const { prompts, unreadable } = await this.read();
       const result = edit(prompts);
       if (result) {
-        const lines = [...unreadable, ...prompts.map((e) => JSON.stringify(e))];
+        const header = JSON.stringify({ version: FILE_VERSION });
+        const lines = [header, ...unreadable, ...prompts.map((e) => JSON.stringify(e))];
         await writeFileAtomic(this.filePath, lines.length ? lines.join('\n') + '\n' : '');
       }
       return result;

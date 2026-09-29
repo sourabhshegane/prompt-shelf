@@ -28,8 +28,10 @@ describe('Store', () => {
     const store = new Store(file);
     await store.add({ text: 'multi\nline', agent: 'claude', cwd: '/a' });
     const raw = await readFile(file, 'utf8');
-    expect(raw.trim().split('\n')).toHaveLength(1);
-    expect(JSON.parse(raw.trim()).text).toBe('multi\nline');
+    const lines = raw.trim().split('\n');
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!)).toHaveProperty('version');
+    expect(JSON.parse(lines[1]!).text).toBe('multi\nline');
   });
 
   it('removes by id and reports whether something was removed', async () => {
@@ -52,7 +54,10 @@ describe('Store', () => {
     const store = new Store(file);
     expect((await store.list()).map((e) => e.text)).toEqual(['ok']);
     await store.remove('1');
-    expect(await readFile(file, 'utf8')).toBe('not json\nnull\n{"id":2}\n');
+    const content = await readFile(file, 'utf8');
+    const lines = content.trim().split('\n');
+    expect(lines[0]).toBe('{"version":2}');
+    expect(lines.slice(1).join('\n') + '\n').toBe('not json\nnull\n{"id":2}\n');
   });
 });
 

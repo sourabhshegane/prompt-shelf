@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { debug } from '../debug.js';
@@ -41,11 +41,17 @@ export async function withFileLock<T>(file: string, fn: () => Promise<T>): Promi
   }
 }
 
-/** Writes through a uniquely named temp file and a rename, so readers never see half a file. */
+/** Writes through a uniquely named temp file and a rename, so readers never see half a file. Sets 0600 permissions. */
 export async function writeFileAtomic(file: string, content: string): Promise<void> {
   await mkdir(dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(tmp, content, 'utf8');
+  // Set permissions before rename so the new file is never world-readable
+  try {
+    await chmod(tmp, 0o600);
+  } catch {
+    // If chmod fails, rename anyway; this maintains atomic semantics
+  }
   await rename(tmp, file);
 }
 

@@ -2,7 +2,10 @@ import { UserError } from '../errors.js';
 import { readTextIfExists, withFileLock, writeFileAtomic } from './files.js';
 import { DEFAULT_SHELVES, findShelf, validName } from '../domain/shelf.js';
 
+const FILE_VERSION = 1;
+
 interface ShelfFile {
+  version: number;
   shelves: string[];
   starred: string[];
 }
@@ -14,17 +17,19 @@ export class Shelves {
   // A missing file means the defaults; a damaged one is an error, so a save can't silently wipe it.
   private async read(): Promise<ShelfFile> {
     const raw = await readTextIfExists(this.filePath);
-    if (raw === null) return { shelves: [...DEFAULT_SHELVES], starred: [] };
+    if (raw === null) return { version: FILE_VERSION, shelves: [...DEFAULT_SHELVES], starred: [] };
     let parsed: Partial<Record<keyof ShelfFile, unknown>>;
     try {
       parsed = JSON.parse(raw) as typeof parsed;
     } catch {
       throw new UserError(`${this.filePath} is damaged; fix or delete it (your prompts are safe in the stash file)`);
     }
+    const version = typeof parsed.version === 'number' ? parsed.version : 1;
+    if (version > FILE_VERSION) throw new UserError(`${this.filePath} is from a newer version (v${version}); upgrade prompt-shelf`);
     const names = (v: unknown) => (Array.isArray(v) ? v.filter((n): n is string => typeof n === 'string') : []);
     const shelves = names(parsed.shelves);
     // Spread first so fields a newer version added survive this version's saves.
-    return { ...parsed, shelves, starred: names(parsed.starred).filter((n) => shelves.includes(n)) };
+    return { ...parsed, version: FILE_VERSION, shelves, starred: names(parsed.starred).filter((n) => shelves.includes(n)) };
   }
 
   // Read, change and save under a lock, so sessions and quick key presses never lose each other's changes.

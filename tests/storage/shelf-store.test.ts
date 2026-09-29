@@ -18,7 +18,7 @@ describe('Shelves', () => {
     await shelves.create('  Git   tips ');
     await shelves.remove('Ideas');
     expect(await shelves.list()).toEqual(['To explore', 'Common', 'Git tips']);
-    expect(JSON.parse(await readFile(join(dir, 'shelves.json'), 'utf8'))).toEqual({ shelves: ['To explore', 'Common', 'Git tips'], starred: [] });
+    expect(JSON.parse(await readFile(join(dir, 'shelves.json'), 'utf8'))).toEqual({ version: 1, shelves: ['To explore', 'Common', 'Git tips'], starred: [] });
   });
 
   it('never brings the defaults back once the user has removed them all', async () => {
