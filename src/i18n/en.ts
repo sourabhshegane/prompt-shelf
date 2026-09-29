@@ -22,6 +22,7 @@ export const en = {
   'actions.alreadyLast': 'already last',
   'actions.starredShelf': 'starred {shelf}',
   'actions.unstarredShelf': 'unstarred {shelf}',
+  'actions.renameShelf': 'renaming {shelf}…',
 
   // List panel
   'list.noSkillsFor': 'no skills found for {agent} here',

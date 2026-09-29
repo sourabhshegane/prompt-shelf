@@ -87,6 +87,15 @@ export async function listEffect(ctx: ActionContext, action: ListAction, hasDraf
       const moved = await ctx.shelves.move(await ctx.shelves.create(action.shelf), action.step);
       return moved ? { refresh: true } : { status: { text: t(action.step < 0 ? 'actions.alreadyFirst' : 'actions.alreadyLast') } };
     }
+    case 'delete-shelf': {
+      // Confirmation is handled in the UI; just delete the shelf and leave its prompts orphaned
+      await ctx.shelves.remove(action.shelf);
+      return { refresh: true, status: { text: t('cli.shelf.deletedMsg', { name: action.shelf, count: '' }) } };
+    }
+    case 'rename-shelf': {
+      const newName = await ctx.shelves.rename(action.shelf, action.newName);
+      return { refresh: true, status: { text: t('cli.shelf.renamedMsg', { old: action.shelf, new: newName }) } };
+    }
     case 'none':
       return {};
   }
