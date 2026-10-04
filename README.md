@@ -13,6 +13,8 @@ Press `Ctrl+F` to put the draft on the shelf, say what matters now, and press
 `Ctrl+Q` to bring the draft back when you're ready. **Keep as many drafts on
 the shelf as you like**, and they survive closing the session.
 
+![park a half-written prompt with Ctrl+F, bring it back with Ctrl+Q](docs/demo/demo.gif)
+
 ## Install
 
 **Homebrew** (macOS):
@@ -38,8 +40,6 @@ npm i -g prompt-shelf && stash enable
 Then **open a new terminal tab** and run `claude` or `codex` as usual.
 `Ctrl+F` stashes a draft, `Ctrl+Q` brings it back. `stash doctor` checks the
 setup: it should say `on PATH: yes` and `claude: shim installed`.
-
-![park a half-written prompt with Ctrl+F, bring it back with Ctrl+Q](docs/demo/demo.gif)
 
 ## Why not Claude Code's `Ctrl+S`?
 

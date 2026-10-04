@@ -1,0 +1,20 @@
+name: Idea or feature request
+description: Something prompt-shelf could do, or another agent it could support
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation, in your own words. What gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Which agent is this for?
+      options: [Claude Code, Codex CLI, Both, Another agent (say which below)]

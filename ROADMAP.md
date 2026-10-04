@@ -5,12 +5,6 @@ or open a new issue with a different idea.
 
 ## Next
 
-- **Prompt library with groups.** ([#1](https://github.com/sourabhshegane/prompt-shelf/issues/1)) The stash is for things you'll use once. A
-  library would hold prompts you reuse, sorted into groups you name, like
-  `Skills`, `Features` or `Common prompts`. Picking one from the library adds
-  it to the box and keeps it there. The list gets two tabs: Stash and Library.
-  You could also move a stash entry into a group once you know you'll need it
-  again.
 - **Choose what the list shows.** ([#2](https://github.com/sourabhshegane/prompt-shelf/issues/2)) Today the list opens on the current git
   repo's entries and `Tab` shows everything. A setting (and more `Tab` stops)
   would let you pick the default:
@@ -27,6 +21,12 @@ or open a new issue with a different idea.
   [CONTRIBUTING.md](CONTRIBUTING.md#adding-an-agent)).
 
 ## Done
+
+- Shelves: named lists of prompts you reuse, picked from the list and kept
+  after use; save to one from `Ctrl+F`, rename (`r`) or delete (`D`) in the list
+  ([#1](https://github.com/sourabhshegane/prompt-shelf/issues/1), 0.2.0)
+- Skills tab: the skills the agent can use here, one `Enter` away (0.2.0)
+- A start-up notice and a Claude Code status line say prompt-shelf is on (0.2.0)
 
 - Multi-slot stash that survives sessions (`Ctrl+F`)
 - List opens on the current git repo's entries, from any subfolder; `Tab` shows all
