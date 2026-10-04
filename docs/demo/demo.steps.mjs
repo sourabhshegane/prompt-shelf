@@ -9,13 +9,14 @@ const LIST_OPEN = /switch list/;
 // The whole idea in under 20 seconds, in a small terminal so the input box is the picture: a
 // half-written prompt, Ctrl+F parks it and the box is free, Ctrl+Q brings it back; then a list
 // of saved prompts. Nothing is sent to the model.
-// Seed the data folder with a prompt or two on the Common shelf first (see README.md here).
+// 16 rows puts the list (11 rows) right on top of the input box. Seed a few older drafts and
+// saved prompts first (docs/demo/seed.sh) so the list is full, not a few lines and a gap.
 export default {
   command: '/opt/homebrew/bin/stash',
   // The status line is off: Claude only refreshes it on new messages, so it would lag behind.
   args: ['claude', '--model', 'haiku', '--settings', '{"statusLine":{"type":"command","command":"true"}}'],
   cols: 80,
-  rows: 18,
+  rows: 16,
   steps: [
     { waitFor: /❯/, timeout: 20000 },
     { waitFor: /prompt-shelf on/, timeout: 8000 },
@@ -35,7 +36,7 @@ export default {
     { wait: 300 },
     { hold: 1600 },
 
-    { caption: ['Ctrl+Q brings it back.', 'Saved prompts live here too.'] },
+    { caption: ['Ctrl+Q brings it back.', 'Enter puts it in the box.'] },
     { key: CTRL_Q, label: 'Ctrl+Q' },
     { waitFor: LIST_OPEN, timeout: 5000 },
     { wait: 300 },

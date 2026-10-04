@@ -1,9 +1,10 @@
 # Re-recording the demo GIFs
 
 `demo.gif` comes from `demo.steps.mjs`: the whole idea in under 20 seconds. A half-written
-prompt, Ctrl+F parks it, Ctrl+Q brings it back, then a list of saved prompts, in a small terminal (80x18) so the input box is
-the picture. Nothing is sent to the model. Seed the data folder first, from inside the demo
-folder: `stash add --shelf Common "<prompt>"` for a prompt or two.
+prompt, Ctrl+F parks it, Ctrl+Q brings it back, then a list of saved prompts. The terminal is
+80x16 so the list (11 rows) opens right on top of the input box, and nothing is sent to the
+model. Seed the data folder first, from inside the demo folder, so the list is full:
+`STASH=stash sh docs/demo/seed.sh` (path relative to this repo).
 
 Needs `agg` and `ffmpeg` (`brew install agg ffmpeg`) and a folder Claude Code already trusts,
 e.g. `~/Documents/personal-projects/demo-app`. Record with `PROMPT_SHELF_DIR` pointing at an
@@ -20,5 +21,5 @@ node docs/demo/render.mjs /tmp/demo.cast docs/demo/demo.gif
 `record.mjs` drives a real Claude Code session through a PTY and saves an asciicast with markers:
 captions, key names, holds, `trimStart` (skip the agent's start-up) and `fastForward`.
 `render.mjs` blanks account usage lines and Claude's feedback banner, shortens pauses, adds the
-holds, and draws each caption as a quiet box just above the action (or in the list's empty rows
-when the list fills the screen), with a badge naming each key as it is pressed.
+holds, ends the picture at the input box's bottom edge, and puts the caption in one fixed strip
+right under it, with a badge naming each key as it is pressed.

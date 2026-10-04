@@ -1,8 +1,9 @@
-// Turns a recording from record.mjs into a GIF. Each caption is a quiet box pinned just above
-// where the action is (the input box, a toast, the save picker or the list), and the camera
-// zooms in on that spot, so the eye is held where things happen. Blanks
-// account usage lines and Claude's feedback banner, and shortens pauses. A caption is one string
-// or [line, smaller line]; each stays up long enough to read.
+// Turns a recording from record.mjs into a GIF. The viewer watches the agent's input box, so
+// the GIF ends at the box's bottom edge and the caption sits in one fixed strip right under it,
+// with a badge naming each key as it is pressed. Everything the keys do (the save picker, the
+// toast, the list) opens just above the box. Also blanks account usage lines and Claude's
+// feedback banner, shortens pauses, and honours the recorder's markers (hold, trimStart,
+// fastForward). A caption is one string or [line, smaller line].
 // Usage: node docs/demo/render.mjs <in.cast> <out.gif>
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -12,17 +13,16 @@ import xterm from '@xterm/headless';
 
 const [, , inPath, outPath] = process.argv;
 const IDLE = 1.5; // longest pause kept, in seconds
+const FAST = 4; // speed-up between fastForward markers
 const HOLD = 3; // last frame stays up this long
 const READ_BASE = 1.2;
 const READ_PER_WORD = 0.28;
 const READ_MIN = 2.8;
 const readingTime = (text) => Math.max(READ_MIN, READ_BASE + [text].flat().join(' ').split(/\s+/).filter(Boolean).length * READ_PER_WORD);
-const TERM_FONT = 18;
-const CAPTION_FONT = 19;
-// The caption box: its own background (agg's custom theme: background, foreground, 16 colours).
-const CAPTION_THEME = '1a1e24,e8e8e8,000000,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,d9d9d9,4d4d4d,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,ffffff';
-const CAPTION_BORDER = '0x2c323a';
-const MARGIN = 14; // px between the box and the terminal's sides, and above the action
+const FONT = 18;
+// The caption strip: its own background, a shade off the terminal's, so it reads as separate.
+const CAPTION_THEME = '1d2229,e8e8e8,000000,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,d9d9d9,4d4d4d,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,ffffff';
+const BADGE_SECONDS = 1.4;
 const AMBER = '\x1b[1;38;5;214m';
 const SUB = '\x1b[38;5;250m';
 const RESET = '\x1b[0m';
@@ -42,11 +42,11 @@ const clean = (text) => text.replace(usage, blankText).replace(promo, blankPromo
 const [header, ...lines] = readFileSync(inPath, 'utf8').trim().split('\n');
 const { width, height } = JSON.parse(header);
 
-// Pass 1: shorten long pauses.
+// Pass 1: timing. Long pauses shrink, fast-forwarded stretches play quicker, holds are added,
+// and everything before trimStart happens at time 0.
 const events = [];
 let last = 0;
 let now = 0;
-const FAST = 4; // speed-up between fastForward markers
 let fast = false;
 for (const line of lines) {
   const [t, type, data] = JSON.parse(line);
@@ -61,7 +61,7 @@ for (const line of lines) {
   else if (marker?.startsWith('key:')) events.push({ t: now, type: 'k', data: marker.slice(4) });
   else if (type === 'm' || type === 'o') events.push({ t: now, type, data });
 }
-// Pass 2: give each caption its reading time by holding the screen at the end of its segment.
+// Pass 2: each caption stays up long enough to read; the screen holds on its result if needed.
 const markerIdx = events.flatMap((e, i) => (e.type === 'm' ? [i] : []));
 const holds = new Map();
 markerIdx.forEach((mi, k) => {
@@ -84,73 +84,46 @@ events.forEach((e, i) => {
 shift += holds.get(events.length) ?? 0;
 now += shift;
 output.push(JSON.stringify([now, 'o', '']));
-
-// Top row of the action at the bottom: the stash list or save picker when one is open, else the
-// agent's working line or a toast right above the input box, else the input box's top border
-// (the second-last full-width rule on screen).
-const ROOM_ROWS = 4; // rows a caption box needs, with a little air
-const actionTop = (term) => {
-  const b = term.buffer.active;
-  const text = (y) => b.getLine(y)?.translateToString(true) ?? '';
-  const rules = [];
-  for (let y = 0; y < term.rows; y++) if (/^─{20,}/.test(text(y))) rules.push(y);
-  const border = rules.at(-2);
-  if (border === undefined) return null;
-  for (let y = border - 1; y >= 0 && y >= border - 14; y--) {
-    if (!/←→ switch list|^ ?Save to:/.test(text(y))) continue;
-    // A tall list near the top leaves no room above it: use its first empty stretch instead, so
-    // the caption sits under the entries rather than on the tabs.
-    if (y >= ROOM_ROWS) return y;
-    for (let gap = y + 1; gap + ROOM_ROWS < border; gap++) {
-      if (Array.from({ length: ROOM_ROWS + 1 }, (_, i) => text(gap + i).trim()).every((t) => !t)) return gap + ROOM_ROWS;
-    }
-    return y;
-  }
-  for (let y = border - 1; y >= border - 3 && y >= 0; y--) if (/^\S \S+…/.test(text(y))) return y;
-  return text(border - 1).trim() ? border - 1 : border;
-};
-
 const end = now + HOLD;
-captions.forEach((c, i) => (c.end = captions[i + 1]?.start ?? end));
-// Replay the screen and note where the action is over time, so the caption box follows it (up
-// when the list opens, back down when it closes).
+
+// The input box's bottom edge: the last full-width rule on screen, lowest seen in the recording.
 const replay = new xterm.Terminal({ cols: width, rows: height, allowProposedApi: true, scrollback: 0 });
-const segments = []; // [start, top]
+let boxBottom = 0;
 for (const line of output) {
-  const [t, , data] = JSON.parse(line);
-  await new Promise((r) => replay.write(data, r));
-  const top = actionTop(replay);
-  if (top !== null && top !== segments.at(-1)?.[1]) segments.push([t, top]);
+  await new Promise((r) => replay.write(JSON.parse(line)[2], r));
+  const b = replay.buffer.active;
+  for (let y = height - 1; y >= 0; y--) {
+    if (/^─{20,}/.test(b.getLine(y)?.translateToString(true) ?? '')) {
+      boxBottom = Math.max(boxBottom, y);
+      break;
+    }
+  }
 }
+
 const work = mkdtempSync(join(tmpdir(), 'prompt-shelf-demo-'));
-const agg = (name, rows, font, theme = 'asciinema') => {
+const agg = (name, rows, theme = 'asciinema') => {
   writeFileSync(join(work, `${name}.cast`), rows.join('\n') + '\n');
-  execFileSync('agg', ['--font-size', String(font), '--theme', theme, '--speed', '1', '--idle-time-limit', '1000', '--last-frame-duration', String(HOLD), join(work, `${name}.cast`), join(work, `${name}.gif`)], { stdio: 'ignore' });
+  execFileSync('agg', ['--font-size', String(FONT), '--theme', theme, '--speed', '1', '--idle-time-limit', '1000', '--last-frame-duration', String(HOLD), join(work, `${name}.cast`), join(work, `${name}.gif`)], { stdio: 'ignore' });
   const [w, h] = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', join(work, `${name}.gif`)]).toString().trim().split(',').map(Number);
   return { w, h };
 };
 const still = (cols, rows) => [JSON.stringify({ version: 2, width: cols, height: rows }), JSON.stringify([0, 'o', '']), JSON.stringify([0.1, 'o', ''])];
 
-// The terminal, and its row height and padding (from two empty recordings one row apart).
-const term = agg('term', [header, ...output], TERM_FONT);
-const rowPx = agg('row2', still(width, 2), TERM_FONT).h - agg('row1', still(width, 1), TERM_FONT).h;
+const term = agg('term', [header, ...output]);
+const rowPx = agg('row2', still(width, 2)).h - agg('row1', still(width, 1)).h;
 const padPx = (term.h - height * rowPx) / 2;
-// The camera: zoomed in on the bottom-left, where the action and its caption are, so they fill
-// the frame; it eases out as far as the list needs when the list opens.
-const ZOOM_MAX = 1; // a small terminal at a large font needs no zoom; raise this for a big one
-const EASE = 0.5; // seconds to move from one zoom level to the next
-const LEAD = 0.15; // the box and camera move this much before the screen changes
-// The caption box: narrow enough to stay in view at full zoom.
-const charPx = (agg('c20', still(20, 1), CAPTION_FONT).w - agg('c10', still(10, 1), CAPTION_FONT).w) / 10;
-const capPad = agg('c10', still(10, 1), CAPTION_FONT).w - 10 * charPx;
-const capCols = Math.floor((term.w / ZOOM_MAX - 2 * MARGIN - capPad) / charPx);
-// Each caption, plus a badge naming the key for a moment after it is pressed.
-const BADGE_SECONDS = 1.4;
+const cropH = Math.round(padPx + (boxBottom + 1) * rowPx + rowPx / 3);
+
+// The caption strip: the same width and font as the terminal, two rows, a badge at the right.
 const drawCaption = (c, badge) => {
   const [line, sub = ''] = [c.text].flat();
-  const tag = badge ? `\x1b[2;${Math.max(1, capCols - badge.length - 1)}H\x1b[7;1;38;5;214m ${badge} ${RESET}` : '';
+  const tag = badge ? `\x1b[1;${Math.max(1, width - badge.length - 2)}H\x1b[7;1;38;5;214m ${badge} ${RESET}` : '';
   return `\x1b[2J\x1b[1;1H\x1b[1m${highlight(line, '\x1b[1m')}${RESET}\x1b[2;1H${SUB}${highlight(sub, SUB)}${RESET}${tag}`;
 };
+for (const c of captions) {
+  const [line, sub = ''] = [c.text].flat();
+  if (line.length > width - 14 || sub.length > width) console.warn(`caption may collide with a key badge or wrap: ${line}`);
+}
 const captionAt = (t) => captions.findLast((c) => c.start <= t) ?? captions[0];
 const captionEvents = [
   ...captions.map((c) => [c.start, drawCaption(c)]),
@@ -164,33 +137,10 @@ const captionEvents = [
   .map(([t, data]) => [t, 'o', data]);
 captionEvents.unshift([0, 'o', '\x1b[?25l']);
 captionEvents.push([now, 'o', '']);
-for (const c of captions) {
-  for (const text of [c.text].flat()) if (text.length > capCols - 10) console.warn(`caption may collide with a key badge or wrap (max ${capCols - 10} chars): ${text}`);
-}
-const cap = agg('captions', [JSON.stringify({ version: 2, width: capCols, height: 2 }), ...captionEvents.map((e) => JSON.stringify(e))], CAPTION_FONT, CAPTION_THEME);
+agg('captions', [JSON.stringify({ version: 2, width, height: 2 }), ...captionEvents.map((e) => JSON.stringify(e))], CAPTION_THEME);
 
-const yAt = (top) => Math.max(MARGIN, Math.round(padPx + top * rowPx - cap.h - MARGIN / 2));
-// Built so the latest screen state is checked first.
-const y = segments.reduce((rest, [start, top]) => `if(gte(t\\,${Math.max(0, start - LEAD).toFixed(2)})\\,${yAt(top)}\\,${rest})`, String(yAt(segments[0]?.[1] ?? height - 4)));
-
-// Zoom so the view's top edge sits just above the caption box; the view is anchored bottom-left.
-const zoomFor = (top) => Math.min(ZOOM_MAX, Math.max(1, term.h / (term.h - yAt(top) + MARGIN)));
-const zoomedFrom = 0;
-const zoomedUntil = end;
-const changes = [[0, zoomFor(segments.find(([t]) => t > 0)?.[1] ?? height - 4)]];
-for (const [start, top] of segments) {
-  const t = Math.max(zoomedFrom, Math.min(zoomedUntil, start)) - LEAD;
-  const z = start >= zoomedUntil ? 1 : zoomFor(top);
-  if (z !== changes.at(-1)[1]) changes.push([Math.max(0, t), z]);
-}
-changes.sort((a, b) => a[0] - b[0]);
-const zoomExpr = changes.reduce((rest, [t, z], i) => {
-  const from = i === 0 ? 1 : changes[i - 1][1];
-  return `if(gte(it,${t.toFixed(2)}),${from.toFixed(3)}+${(z - from).toFixed(3)}*min(1,(it-${t.toFixed(2)})/${EASE}),${rest})`;
-}, '1');
-const camera = `scale=${term.w * 2}:${term.h * 2}:flags=lanczos,zoompan=z='${zoomExpr}':x='0':y='ih-ih/zoom':d=1:s=${term.w}x${term.h}:fps=10`;
 execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', join(work, 'term.gif'), '-i', join(work, 'captions.gif'), '-filter_complex',
-  `[1]fps=10,drawbox=x=0:y=0:w=iw:h=ih:color=${CAPTION_BORDER}:t=1[c];[0]fps=10[t];[t][c]overlay=x=${MARGIN}:y='${y}':eval=frame:shortest=0,${camera},split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
+  `[0]fps=10,crop=iw:${cropH}:0:0[t];[1]fps=10,scale=${term.w}:-2[c];[t][c]vstack=shortest=0,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
   '-loop', '0', outPath]);
-console.log(`wrote ${outPath} (${end.toFixed(1)}s, ${captions.length} captions)`);
-for (const c of captions) console.log(`  ${(c.end - c.start).toFixed(1).padStart(4)}s  ${[c.text].flat()[0]}`);
+console.log(`wrote ${outPath} (${end.toFixed(1)}s, ${captions.length} captions, cropped at row ${boxBottom})`);
+for (const [i, c] of captions.entries()) console.log(`  ${((captions[i + 1]?.start ?? end) - c.start).toFixed(1).padStart(4)}s  ${[c.text].flat()[0]}`);
