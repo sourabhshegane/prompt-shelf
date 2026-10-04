@@ -24,12 +24,12 @@ export const en = {
   'actions.unstarredShelf': 'unstarred {shelf}',
 
   // Start-up notice and the Claude Code status line
-  'welcome.keys': 'prompt-shelf on · {save} park · {list} list',
+  'welcome.keys': 'prompt-shelf on · {save} to stash · {list} to unstash',
   'welcome.parked_one': '1 draft parked here',
   'welcome.parked_other': '{count} drafts parked here',
-  'statusline.parked_one': 'prompt-shelf · 1 parked · {list}',
-  'statusline.parked_other': 'prompt-shelf · {count} parked · {list}',
-  'statusline.idle': 'prompt-shelf · {save} park · {list} list',
+  'statusline.parked_one': '⌁ prompt-shelf · 1 parked · {save} to stash · {list} to unstash',
+  'statusline.parked_other': '⌁ prompt-shelf · {count} parked · {save} to stash · {list} to unstash',
+  'statusline.idle': '⌁ prompt-shelf · {save} to stash · {list} to unstash',
 
   // List panel
   'list.noSkillsFor': 'no skills found for {agent} here',

@@ -952,12 +952,12 @@ var en = {
   "actions.starredShelf": "starred {shelf}",
   "actions.unstarredShelf": "unstarred {shelf}",
   // Start-up notice and the Claude Code status line
-  "welcome.keys": "prompt-shelf on \xB7 {save} park \xB7 {list} list",
+  "welcome.keys": "prompt-shelf on \xB7 {save} to stash \xB7 {list} to unstash",
   "welcome.parked_one": "1 draft parked here",
   "welcome.parked_other": "{count} drafts parked here",
-  "statusline.parked_one": "prompt-shelf \xB7 1 parked \xB7 {list}",
-  "statusline.parked_other": "prompt-shelf \xB7 {count} parked \xB7 {list}",
-  "statusline.idle": "prompt-shelf \xB7 {save} park \xB7 {list} list",
+  "statusline.parked_one": "\u2301 prompt-shelf \xB7 1 parked \xB7 {save} to stash \xB7 {list} to unstash",
+  "statusline.parked_other": "\u2301 prompt-shelf \xB7 {count} parked \xB7 {save} to stash \xB7 {list} to unstash",
+  "statusline.idle": "\u2301 prompt-shelf \xB7 {save} to stash \xB7 {list} to unstash",
   // List panel
   "list.noSkillsFor": "no skills found for {agent} here",
   "list.emptyShelf": "{name} is empty \u2014 on the stash tab press s on a draft to save it here",
@@ -2338,7 +2338,7 @@ function statusCwd(stdin) {
 function statusText(opts) {
   if (!opts.inSession) return "";
   const parked = scoped(opts.prompts.filter(isStashDraft), "repo", opts.cwd).length;
-  return parked ? tn("statusline.parked", parked, { count: parked, list: opts.list }) : t("statusline.idle", { save: opts.save, list: opts.list });
+  return parked ? tn("statusline.parked", parked, { count: parked, save: opts.save, list: opts.list }) : t("statusline.idle", { save: opts.save, list: opts.list });
 }
 
 // src/cli/main.ts

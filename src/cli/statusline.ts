@@ -19,5 +19,5 @@ export function statusCwd(stdin: string): string | undefined {
 export function statusText(opts: { prompts: Prompt[]; cwd: string; inSession: boolean; save: string; list: string }): string {
   if (!opts.inSession) return '';
   const parked = scoped(opts.prompts.filter(isStashDraft), 'repo', opts.cwd).length;
-  return parked ? tn('statusline.parked', parked, { count: parked, list: opts.list }) : t('statusline.idle', { save: opts.save, list: opts.list });
+  return parked ? tn('statusline.parked', parked, { count: parked, save: opts.save, list: opts.list }) : t('statusline.idle', { save: opts.save, list: opts.list });
 }

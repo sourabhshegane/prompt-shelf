@@ -115,7 +115,7 @@ describe('Session start-up notice', () => {
     await store.add({ text: 'a draft', agent: 'claude', cwd: dir });
     session.agentOutput(claudeBox(''));
     await afterWelcome();
-    expect(stripAnsi(shown)).toContain('prompt-shelf on · ctrl+f park · ctrl+q list · 1 draft parked here');
+    expect(stripAnsi(shown)).toContain('prompt-shelf on · ctrl+f to stash · ctrl+q to unstash · 1 draft parked here');
   });
 
   it('shows once, and not at all before the input box is drawn', async () => {
