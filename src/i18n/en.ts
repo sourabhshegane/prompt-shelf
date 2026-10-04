@@ -23,6 +23,14 @@ export const en = {
   'actions.starredShelf': 'starred {shelf}',
   'actions.unstarredShelf': 'unstarred {shelf}',
 
+  // Start-up notice and the Claude Code status line
+  'welcome.keys': 'prompt-shelf on · {save} park · {list} list',
+  'welcome.parked_one': '1 draft parked here',
+  'welcome.parked_other': '{count} drafts parked here',
+  'statusline.parked_one': '⌁ 1 parked · {list}',
+  'statusline.parked_other': '⌁ {count} parked · {list}',
+  'statusline.idle': '⌁ stash · {save} park · {list} list',
+
   // List panel
   'list.noSkillsFor': 'no skills found for {agent} here',
   'list.emptyShelf': '{name} is empty — on the stash tab press s on a draft to save it here',

@@ -739,19 +739,20 @@ var Display = class {
     this.out.write(ansi.hideCursor + frame.map((line, i) => ansi.moveTo(next.top + i, 0) + line).join(""));
   }
   /** A short message: in the panel's footer when one is shown, otherwise in a bar above the input box. */
-  toast(status) {
+  toast(status, ms = TOAST_MS) {
     this.clearToast();
     if (this.shown) {
       this.redraw(status);
-      this.toastTimer = setTimeout(() => this.redraw(), TOAST_MS);
+      this.toastTimer = setTimeout(() => this.redraw(), ms);
       return;
     }
-    this.toastBar = ansi.reverse + (status.error ? theme.error : "") + fitLine(` ${status.text} `, this.cols) + ansi.reset;
+    const style = status.hint ? ansi.dim : ansi.reverse + (status.error ? theme.error : "");
+    this.toastBar = style + fitLine(` ${status.text} `, this.cols) + ansi.reset;
     this.drawToast();
     this.toastTimer = setTimeout(() => {
       this.toastBar = null;
       this.repaintAgent();
-    }, TOAST_MS);
+    }, ms);
   }
   dispose() {
     this.clearToast();
@@ -950,6 +951,13 @@ var en = {
   "actions.alreadyLast": "already last",
   "actions.starredShelf": "starred {shelf}",
   "actions.unstarredShelf": "unstarred {shelf}",
+  // Start-up notice and the Claude Code status line
+  "welcome.keys": "prompt-shelf on \xB7 {save} park \xB7 {list} list",
+  "welcome.parked_one": "1 draft parked here",
+  "welcome.parked_other": "{count} drafts parked here",
+  "statusline.parked_one": "\u2301 1 parked \xB7 {list}",
+  "statusline.parked_other": "\u2301 {count} parked \xB7 {list}",
+  "statusline.idle": "\u2301 stash \xB7 {save} park \xB7 {list} list",
   // List panel
   "list.noSkillsFor": "no skills found for {agent} here",
   "list.emptyShelf": "{name} is empty \u2014 on the stash tab press s on a draft to save it here",
@@ -1854,14 +1862,16 @@ async function pickerEffect(ctx, action, text) {
   const shelf = action.type === "create-shelf" ? await ctx.shelves.create(action.name) : action.shelf && await ctx.shelves.create(action.shelf);
   await ctx.store.add({ text, agent: ctx.agent, cwd: ctx.cwd, ...shelf ? { shelf } : {} });
   const count = await draftsLeft(ctx);
-  const statusText = shelf ? t("save.savedTo", { shelf }) : t("save.stashed", { count });
-  return { close: true, clearDraft: true, status: { text: statusText } };
+  const statusText2 = shelf ? t("save.savedTo", { shelf }) : t("save.stashed", { count });
+  return { close: true, clearDraft: true, status: { text: statusText2 } };
 }
 
 // src/session/session.ts
 var ESC_FLUSH_MS = 25;
 var PASTE_CHECK_MS = 100;
 var PICKER_ROWS = 3;
+var WELCOME_DELAY_MS = 600;
+var WELCOME_MS = 6e3;
 var isKey = (chunk, key) => key.sequences.some((seq) => chunk.equals(seq));
 var Session = class {
   constructor(deps) {
@@ -1884,6 +1894,8 @@ var Session = class {
   tracker;
   pasteTimer = null;
   escTimer = null;
+  welcomed = false;
+  welcomeTimer = null;
   // Actions run one at a time, in order, so fast key presses never interleave their changes.
   queue = Promise.resolve();
   get panelOpen() {
@@ -1895,9 +1907,25 @@ var Session = class {
   }
   /** Output from the agent. */
   agentOutput(data) {
-    void this.deps.screen.write(data);
+    void this.deps.screen.write(data).then(() => this.welcomeOnce());
     this.deps.display.agentOutput(data);
     this.checkPastesSoon();
+  }
+  // Once per run, when the agent's input box first shows: say prompt-shelf is on, its keys, and
+  // how many drafts are waiting in this repo. Nothing is shown if a panel opened first.
+  welcomeOnce() {
+    if (this.welcomed || this.deps.adapter.inputTop(this.deps.screen.lines()) === null) return;
+    this.welcomed = true;
+    this.welcomeTimer = setTimeout(() => {
+      this.serial(async () => {
+        if (this.panelOpen) return;
+        const { keys, ctx, display } = this.deps;
+        const parked = scoped((await ctx.store.list()).filter(isStashDraft), "repo", ctx.cwd).length;
+        const keysText = t("welcome.keys", { save: keys.save.label, list: keys.list.label });
+        const text = parked ? `${keysText} \xB7 ${tn("welcome.parked", parked, { count: parked })}` : keysText;
+        display.toast({ text, hint: true }, WELCOME_MS);
+      });
+    }, WELCOME_DELAY_MS);
   }
   /** Input from the user's terminal. */
   userInput(chunk) {
@@ -1925,7 +1953,7 @@ var Session = class {
     if (this.input.hasPending) this.escTimer = setTimeout(() => !this.panelOpen && this.flushInput(), ESC_FLUSH_MS);
   }
   dispose() {
-    for (const timer of [this.escTimer, this.pasteTimer]) if (timer) clearTimeout(timer);
+    for (const timer of [this.escTimer, this.pasteTimer, this.welcomeTimer]) if (timer) clearTimeout(timer);
     this.deps.display.dispose();
   }
   forPanel(chunk, effectOf) {
@@ -2027,6 +2055,7 @@ var Session = class {
 };
 
 // src/session/run.ts
+var SESSION_ENV = "PROMPT_SHELF_SESSION";
 async function runApp(opts) {
   const { adapter } = opts;
   const env = { ...process.env, PATH: stripShimDir(process.env.PATH) };
@@ -2042,7 +2071,7 @@ async function runApp(opts) {
   const screen = new Screen(stdout.columns || 80, stdout.rows || 24);
   const display = new Display(stdout, screen, adapter);
   debug("session", "start", { agent: adapter.name, cols: display.cols, rows: display.rows, record });
-  const pty = spawnAgent({ command, args, cols: display.cols, rows: display.rows, cwd, env });
+  const pty = spawnAgent({ command, args, cols: display.cols, rows: display.rows, cwd, env: { ...env, [SESSION_ENV]: "1" } });
   const session = new Session({
     adapter,
     ctx: { store: new Store(promptsFile), shelves: new Shelves(shelvesFile), agent: adapter.name, cwd, skillPrompt: adapter.skillPrompt },
@@ -2149,6 +2178,7 @@ function parseArgs(argv) {
     case "enable":
     case "disable":
     case "doctor":
+    case "statusline":
       return { kind: first };
     case "hotkey":
       return args[0] === "list" ? { kind: "hotkey", list: true, spec: args[1] } : { kind: "hotkey", list: false, spec: args[0] };
@@ -2182,6 +2212,7 @@ Setup:
   stash enable                    install shims so plain ${adapterNames.join(" / ")} run through stash
   stash disable                   remove the shims and the PATH line
   stash doctor                    show versions, paths, shims and real agent binaries
+  stash statusline                print a status-line line (drafts parked here, or the keys); see README
   stash hotkey [key]              show both hotkeys, or set the stash hotkey (ctrl+<letter> or f1..f12), e.g. stash hotkey f2
   stash hotkey list [key]         show or set the list hotkey
 
@@ -2294,12 +2325,39 @@ async function runShelfCommand(cmd, shelves, store) {
   return deletedMessage(await deleteShelf(shelves, store, first, cmd.force));
 }
 
+// src/cli/statusline.ts
+function statusCwd(stdin) {
+  try {
+    const data = JSON.parse(stdin);
+    const dir = data.workspace?.current_dir ?? data.cwd;
+    return typeof dir === "string" ? dir : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function statusText(opts) {
+  if (!opts.inSession) return "";
+  const parked = scoped(opts.prompts.filter(isStashDraft), "repo", opts.cwd).length;
+  return parked ? tn("statusline.parked", parked, { count: parked, list: opts.list }) : t("statusline.idle", { save: opts.save, list: opts.list });
+}
+
 // src/cli/main.ts
 var { version } = package_default;
 var print = (lines) => {
   const text = Array.isArray(lines) ? lines.join("\n") : lines;
   if (text) process.stdout.write(text + "\n");
 };
+var readStdin = () => new Promise((resolve) => {
+  let text = "";
+  const done = () => {
+    process.stdin.destroy();
+    resolve(text);
+  };
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => text += chunk);
+  process.stdin.on("end", done);
+  setTimeout(done, 500).unref();
+});
 var tell = (message) => process.stderr.write(message + "\n");
 async function main(argv) {
   try {
@@ -2362,6 +2420,19 @@ async function run(cmd) {
     case "doctor":
       print(doctorLines(version));
       return 0;
+    case "statusline": {
+      const config = await loadConfig();
+      const stdin = process.stdin.isTTY ? "" : await readStdin();
+      const text = statusText({
+        prompts: await store.list(),
+        cwd: statusCwd(stdin) ?? cwd,
+        inSession: Boolean(process.env[SESSION_ENV]),
+        save: config.hotkey,
+        list: config.listHotkey
+      });
+      if (text) print(text);
+      return 0;
+    }
     case "hotkey":
       print(await runHotkeyCommand(cmd.spec, configFile, cmd.list));
       return 0;

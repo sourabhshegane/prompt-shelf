@@ -92,6 +92,21 @@ prompt-shelf takes over `Ctrl+F` and `Ctrl+Q` while the agent runs. In Claude
 Code `Ctrl+F` normally moves the cursor right one character (the arrow key
 does the same). Pick other keys with `stash hotkey` if you use them.
 
+When the agent starts, a dim line above the input box says prompt-shelf is on,
+shows both keys, and how many drafts are parked in this repo. It fades after a
+few seconds.
+
+For a reminder that stays, Claude Code can show prompt-shelf in its status line
+(`⌁ 2 parked · ctrl+q`, or the keys when nothing is parked). Add this to
+`~/.claude/settings.json`:
+
+```json
+"statusLine": { "type": "command", "command": "stash statusline" }
+```
+
+It prints nothing when Claude Code runs without prompt-shelf, and it replaces
+any status line you already have.
+
 Both keys can be changed, to `ctrl+<letter>` or `f1`–`f12`:
 
 ```bash

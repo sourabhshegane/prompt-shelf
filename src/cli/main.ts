@@ -1,7 +1,8 @@
 import pkg from '../../package.json' with { type: 'json' };
 import { adapterNames, getAdapter } from '../adapters/index.js';
 import { UserError } from '../errors.js';
-import { runApp } from '../session/run.js';
+import { runApp, SESSION_ENV } from '../session/run.js';
+import { loadConfig } from '../storage/config.js';
 import { configFile, promptsFile, shelvesFile } from '../storage/paths.js';
 import { Store } from '../storage/prompt-store.js';
 import { Shelves } from '../storage/shelf-store.js';
@@ -13,6 +14,7 @@ import { describeRemoved, listLines, resolveRef } from './prompt-commands.js';
 import { doctorLines, runHotkeyCommand } from './setup-commands.js';
 import { requireShelf } from '../storage/shelf-ops.js';
 import { runShelfCommand, shelfLines } from './shelf-commands.js';
+import { statusCwd, statusText } from './statusline.js';
 
 const { version } = pkg;
 
@@ -20,6 +22,19 @@ const print = (lines: string | string[]) => {
   const text = Array.isArray(lines) ? lines.join('\n') : lines;
   if (text) process.stdout.write(text + '\n');
 };
+/** All of stdin, or what arrived within half a second (Claude Code pipes a small JSON object). */
+const readStdin = () =>
+  new Promise<string>((resolve) => {
+    let text = '';
+    const done = () => {
+      process.stdin.destroy();
+      resolve(text);
+    };
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk: string) => (text += chunk));
+    process.stdin.on('end', done);
+    setTimeout(done, 500).unref();
+  });
 /** Messages go to stderr, so stdout carries only data (e.g. `stash pop | pbcopy`). */
 const tell = (message: string) => process.stderr.write(message + '\n');
 
@@ -86,6 +101,19 @@ async function run(cmd: ParsedArgs): Promise<number> {
     case 'doctor':
       print(doctorLines(version));
       return 0;
+    case 'statusline': {
+      const config = await loadConfig();
+      const stdin = process.stdin.isTTY ? '' : await readStdin();
+      const text = statusText({
+        prompts: await store.list(),
+        cwd: statusCwd(stdin) ?? cwd,
+        inSession: Boolean(process.env[SESSION_ENV]),
+        save: config.hotkey,
+        list: config.listHotkey,
+      });
+      if (text) print(text);
+      return 0;
+    }
     case 'hotkey':
       print(await runHotkeyCommand(cmd.spec, configFile, cmd.list));
       return 0;

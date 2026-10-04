@@ -25,6 +25,7 @@ Setup:
   stash enable                    install shims so plain ${adapterNames.join(' / ')} run through stash
   stash disable                   remove the shims and the PATH line
   stash doctor                    show versions, paths, shims and real agent binaries
+  stash statusline                print a status-line line (drafts parked here, or the keys); see README
   stash hotkey [key]              show both hotkeys, or set the stash hotkey (ctrl+<letter> or f1..f12), e.g. stash hotkey f2
   stash hotkey list [key]         show or set the list hotkey
 

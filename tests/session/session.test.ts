@@ -104,3 +104,34 @@ describe('Session', () => {
     expect(typed).toBe('j');
   });
 });
+
+describe('Session start-up notice', () => {
+  const afterWelcome = async () => {
+    await new Promise((r) => setTimeout(r, 700));
+    await session.idle();
+  };
+
+  it('says prompt-shelf is on, with its keys and the drafts parked in this repo', async () => {
+    await store.add({ text: 'a draft', agent: 'claude', cwd: dir });
+    session.agentOutput(claudeBox(''));
+    await afterWelcome();
+    expect(stripAnsi(shown)).toContain('prompt-shelf on · ctrl+f park · ctrl+q list · 1 draft parked here');
+  });
+
+  it('shows once, and not at all before the input box is drawn', async () => {
+    session.agentOutput('\x1b[2J\x1b[H loading');
+    await afterWelcome();
+    expect(stripAnsi(shown)).not.toContain('prompt-shelf on');
+    session.agentOutput(claudeBox(''));
+    session.agentOutput(claudeBox(''));
+    await afterWelcome();
+    expect(stripAnsi(shown).split('prompt-shelf on').length - 1).toBe(1);
+  });
+
+  it('stays quiet when a panel is already open', async () => {
+    session.agentOutput(claudeBox(''));
+    await press(CTRL_Q);
+    await afterWelcome();
+    expect(stripAnsi(shown)).not.toContain('prompt-shelf on');
+  });
+});
