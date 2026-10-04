@@ -42,8 +42,11 @@ const highlight = (text) => text.replace(/Ctrl\+[A-Z]|Enter|Tab|^\/|npm i -g pro
 // text up to the next line break or absolute move and keep the escape sequences.
 const usage = /(You've used \d+% of your (weekly|session) limit|\d+% of your (weekly|session) limit|resets \d{1,2}:\d{2}(am|pm)|auto mode unavailable for this model).*?(?=\r|\n|\x1b\[\d+;\d+H|\x1b\[\?|$)/gs;
 const blankText = (segment) => segment.replace(/(\x1b\[[0-9;?]*[A-Za-z])|[^\x1b]/g, (m, esc) => esc ?? ' ');
+// Claude's two-line feedback banner under the logo (a link in it, a line break between).
+const promo = /▎\x1b\[\d*[GC]Your voice can help guide AI[\s\S]*?Start now(\x1b\]8;;\x07)?/g;
+const blankPromo = (segment) => segment.replace(/\x1b\]8;[^\x07]*\x07|\x1b\[[0-9;]*m/g, '').replace(/(\x1b\[[0-9;?]*[A-Za-z])|[^\x1b\r\n]/g, (m, esc) => esc ?? ' ') + '\x1b[0m';
 // Claude puts a no-break space after its prompt marker; agg's font draws it as a symbol.
-const clean = (text) => text.replace(usage, blankText).replace(/ /g, ' ');
+const clean = (text) => text.replace(usage, blankText).replace(promo, blankPromo).replace(/ /g, ' ');
 
 // Top row of the agent's input area: the input box, plus the row above it when that holds a
 // status line (working spinner, toast), or the stash list when it's open. Found from the input
@@ -55,7 +58,7 @@ const bottomBlockTop = (term) => {
   for (let y = 0; y < term.rows; y++) if (/^─{20,}/.test(text(y))) rules.push(y);
   const border = rules.at(-2);
   if (border === undefined) return 0;
-  for (let y = border - 1; y >= 0 && y >= border - 12; y--) if (/^ ?stash · /.test(text(y))) return y;
+  for (let y = border - 1; y >= 0 && y >= border - 12; y--) if (/←→ switch list|^ ?Save to:/.test(text(y))) return y;
   // The agent's working line (e.g. "✽ Germinating… (3s · thinking)") belongs to the action too.
   for (let y = border - 1; y >= border - 3 && y >= 0; y--) if (/^\S \S+…/.test(text(y))) return y;
   return text(border - 1).trim() ? border - 1 : border;
@@ -115,7 +118,7 @@ for (const [i, [t, , data]] of frames.entries()) {
   const top = bottomBlockTop(replay);
   if (top < MIN_BLOCK_TOP) continue;
   const until = frames[i + 1]?.[0] ?? end;
-  const listOpen = /stash · /.test(Array.from({ length: height }, (_, y) => replay.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n'));
+  const listOpen = /←→ switch list|Save to:/.test(Array.from({ length: height }, (_, y) => replay.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n'));
   captions.forEach((c, k) => {
     if (t < c.end && until > c.start) {
       tops[k] = Math.min(tops[k], top);

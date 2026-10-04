@@ -1,10 +1,10 @@
 import type { AgentAdapter, Draft } from '../adapters/index.js';
-import type { SortOrder } from '../domain/prompt.js';
-import type { Scope } from '../domain/scope.js';
+import { isStashDraft, type SortOrder } from '../domain/prompt.js';
+import { scoped, type Scope } from '../domain/scope.js';
 import type { Skill } from '../domain/skill.js';
 import { debug } from '../debug.js';
 import { describeError } from '../errors.js';
-import { t } from '../i18n/index.js';
+import { t, tn } from '../i18n/index.js';
 import { injectPaste } from '../terminal/inject.js';
 import { KeyInterceptor, type Hotkey } from '../terminal/keys.js';
 import { PasteLabels, PasteRecorder, PasteTracker } from '../terminal/pastes.js';
@@ -23,6 +23,9 @@ const ESC_FLUSH_MS = 25;
 const PASTE_CHECK_MS = 100;
 // The save picker: the places row, the draft, and the key hints.
 const PICKER_ROWS = 3;
+// The start-up notice waits for the agent to settle after its input box appears, then stays this long.
+const WELCOME_DELAY_MS = 600;
+const WELCOME_MS = 6000;
 
 export interface SessionDeps {
   adapter: AgentAdapter;
@@ -56,6 +59,8 @@ export class Session {
   private readonly tracker: PasteTracker | null;
   private pasteTimer: NodeJS.Timeout | null = null;
   private escTimer: NodeJS.Timeout | null = null;
+  private welcomed = false;
+  private welcomeTimer: NodeJS.Timeout | null = null;
   // Actions run one at a time, in order, so fast key presses never interleave their changes.
   private queue: Promise<void> = Promise.resolve();
 
@@ -77,9 +82,26 @@ export class Session {
 
   /** Output from the agent. */
   agentOutput(data: string): void {
-    void this.deps.screen.write(data);
+    void this.deps.screen.write(data).then(() => this.welcomeOnce());
     this.deps.display.agentOutput(data);
     this.checkPastesSoon();
+  }
+
+  // Once per run, when the agent's input box first shows: say prompt-shelf is on, its keys, and
+  // how many drafts are waiting in this repo. Nothing is shown if a panel opened first.
+  private welcomeOnce(): void {
+    if (this.welcomed || this.deps.adapter.inputTop(this.deps.screen.lines()) === null) return;
+    this.welcomed = true;
+    this.welcomeTimer = setTimeout(() => {
+      this.serial(async () => {
+        if (this.panelOpen) return;
+        const { keys, ctx, display } = this.deps;
+        const parked = scoped((await ctx.store.list()).filter(isStashDraft), 'repo', ctx.cwd).length;
+        const keysText = t('welcome.keys', { save: keys.save.label, list: keys.list.label });
+        const text = parked ? `${keysText} · ${tn('welcome.parked', parked, { count: parked })}` : keysText;
+        display.toast({ text, hint: true }, WELCOME_MS);
+      });
+    }, WELCOME_DELAY_MS);
   }
 
   /** Input from the user's terminal. */
@@ -110,7 +132,7 @@ export class Session {
   }
 
   dispose(): void {
-    for (const timer of [this.escTimer, this.pasteTimer]) if (timer) clearTimeout(timer);
+    for (const timer of [this.escTimer, this.pasteTimer, this.welcomeTimer]) if (timer) clearTimeout(timer);
     this.deps.display.dispose();
   }
 

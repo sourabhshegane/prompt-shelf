@@ -81,19 +81,20 @@ export class Display {
   }
 
   /** A short message: in the panel's footer when one is shown, otherwise in a bar above the input box. */
-  toast(status: Status): void {
+  toast(status: Status, ms = TOAST_MS): void {
     this.clearToast();
     if (this.shown) {
       this.redraw(status);
-      this.toastTimer = setTimeout(() => this.redraw(), TOAST_MS);
+      this.toastTimer = setTimeout(() => this.redraw(), ms);
       return;
     }
-    this.toastBar = ansi.reverse + (status.error ? theme.error : '') + fitLine(` ${status.text} `, this.cols) + ansi.reset;
+    const style = status.hint ? ansi.dim : ansi.reverse + (status.error ? theme.error : '');
+    this.toastBar = style + fitLine(` ${status.text} `, this.cols) + ansi.reset;
     this.drawToast();
     this.toastTimer = setTimeout(() => {
       this.toastBar = null;
       this.repaintAgent();
-    }, TOAST_MS);
+    }, ms);
   }
 
   dispose(): void {

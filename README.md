@@ -41,6 +41,10 @@ setup: it should say `on PATH: yes` and `claude: shim installed`.
 
 ![park a half-written prompt with Ctrl+F, bring it back with Ctrl+Q](docs/demo/demo.gif)
 
+`Ctrl+Q` is also where your skills and your own lists of reusable prompts live:
+
+![Ctrl+Q shows the stash, the skills Claude can use, and shelves of reusable prompts](docs/demo/lists.gif)
+
 ## Why not Claude Code's `Ctrl+S`?
 
 | | Claude `Ctrl+S` | prompt-shelf |
@@ -91,6 +95,21 @@ the placeholder.
 prompt-shelf takes over `Ctrl+F` and `Ctrl+Q` while the agent runs. In Claude
 Code `Ctrl+F` normally moves the cursor right one character (the arrow key
 does the same). Pick other keys with `stash hotkey` if you use them.
+
+When the agent starts, a dim line above the input box says prompt-shelf is on,
+shows both keys, and how many drafts are parked in this repo. It fades after a
+few seconds.
+
+For a reminder that stays, Claude Code can show prompt-shelf in its status line
+(`⌁ prompt-shelf · 2 parked · ctrl+f to stash · ctrl+q to unstash`; without the count when nothing is parked). Add this to
+`~/.claude/settings.json`:
+
+```json
+"statusLine": { "type": "command", "command": "stash statusline" }
+```
+
+It prints nothing when Claude Code runs without prompt-shelf, and it replaces
+any status line you already have.
 
 Both keys can be changed, to `ctrl+<letter>` or `f1`–`f12`:
 

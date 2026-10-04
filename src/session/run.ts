@@ -15,6 +15,9 @@ import { sessionKeys } from './hotkeys.js';
 import { recordScreen } from './record.js';
 import { Session } from './session.js';
 
+/** Set in the agent's environment, so commands it runs (like `stash statusline`) know prompt-shelf is on. */
+export const SESSION_ENV = 'PROMPT_SHELF_SESSION';
+
 /** `stash <agent>`: runs the agent in a pseudo-terminal with prompt-shelf in between. */
 export async function runApp(opts: { adapter: AgentAdapter; args: string[]; record: boolean }): Promise<number> {
   const { adapter } = opts;
@@ -32,7 +35,7 @@ export async function runApp(opts: { adapter: AgentAdapter; args: string[]; reco
   const screen = new Screen(stdout.columns || 80, stdout.rows || 24);
   const display = new Display(stdout, screen, adapter);
   debug('session', 'start', { agent: adapter.name, cols: display.cols, rows: display.rows, record });
-  const pty = spawnAgent({ command, args, cols: display.cols, rows: display.rows, cwd, env });
+  const pty = spawnAgent({ command, args, cols: display.cols, rows: display.rows, cwd, env: { ...env, [SESSION_ENV]: '1' } });
   const session = new Session({
     adapter,
     ctx: { store: new Store(promptsFile), shelves: new Shelves(shelvesFile), agent: adapter.name, cwd, skillPrompt: adapter.skillPrompt },

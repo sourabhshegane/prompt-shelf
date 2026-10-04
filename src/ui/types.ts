@@ -2,6 +2,8 @@
 export interface Status {
   text: string;
   error?: boolean;
+  /** A quiet notice (dim, no bar) rather than the answer to something the user did. */
+  hint?: boolean;
 }
 
 /**

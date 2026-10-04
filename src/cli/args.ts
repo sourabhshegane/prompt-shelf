@@ -21,6 +21,7 @@ export type ParsedArgs =
   | { kind: 'enable' }
   | { kind: 'disable' }
   | { kind: 'doctor' }
+  | { kind: 'statusline' }
   | { kind: 'hotkey'; list: boolean; spec: string | undefined }
   | { kind: 'help' }
   | { kind: 'version' };
@@ -88,6 +89,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     case 'enable':
     case 'disable':
     case 'doctor':
+    case 'statusline':
       return { kind: first };
     case 'hotkey':
       return args[0] === 'list' ? { kind: 'hotkey', list: true, spec: args[1] } : { kind: 'hotkey', list: false, spec: args[0] };
