@@ -1,6 +1,7 @@
 const CTRL_F = '\x06';
 const CTRL_Q = '\x11';
-const LIST_OPEN = /stash · /;
+const PICKER_OPEN = /Save to:/;
+const LIST_OPEN = /switch list/;
 const WORKING = /esc to interrupt/i;
 const TASK = 'read src/upload.js and explain the retry logic step by step';
 
@@ -21,11 +22,15 @@ export default {
     { wait: 600 },
     { type: 'now add a unit test for the retry path with a fake fetch', speed: 34 },
     { wait: 500 },
-    { caption: ['Claude needs steering right now?', 'Ctrl+F parks your draft. The box is free.'] },
+    { caption: ['Claude needs steering right now?', 'Ctrl+F then Enter parks your draft. The box is free.'] },
     { wait: 1200 },
     { key: CTRL_F },
-    { wait: 1200 },
-    { caption: ['Ask or steer, and send it.', 'Your draft stays safe on the shelf.'] },
+    { waitFor: PICKER_OPEN, timeout: 5000 },
+    { wait: 900 },
+    { key: '\r', expect: PICKER_OPEN },
+    { waitFor: PICKER_OPEN, gone: true, timeout: 5000 },
+    { wait: 1000 },
+    { caption: ['Ask or steer, and send it.', 'Your draft stays safe in the stash.'] },
     { type: 'keep it short, 3 bullets max', speed: 34 },
     { wait: 500 },
     { key: '\r', expect: /3 bullets max/ },
@@ -34,8 +39,10 @@ export default {
     { caption: ['Ctrl+Q brings the draft back when you are ready.', 'Pick it and press Enter.'] },
     { wait: 1200 },
     { key: CTRL_Q },
+    { waitFor: LIST_OPEN, timeout: 5000 },
     { wait: 1500 },
     { key: '\r', expect: LIST_OPEN },
+    { waitFor: LIST_OPEN, gone: true, timeout: 5000 },
     { wait: 2000 },
     { caption: ['npm i -g prompt-shelf', 'Ctrl+F to park a prompt, Ctrl+Q to bring it back.'] },
     { wait: 800 },
