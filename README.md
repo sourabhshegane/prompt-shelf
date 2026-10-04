@@ -11,7 +11,8 @@ halfway through a prompt and something else needs saying first: a quick
 question, a new idea, or Claude is heading the wrong way and needs steering.
 Press `Ctrl+F` to put the draft on the shelf, say what matters now, and press
 `Ctrl+Q` to bring the draft back when you're ready. **Keep as many drafts on
-the shelf as you like**, and they survive closing the session.
+the shelf as you like**, and they survive closing the session. Prompts you reuse
+go on **your own named lists** (shelves), one `Ctrl+Q` away in any repo.
 
 ![park a half-written prompt with Ctrl+F, bring it back with Ctrl+Q](docs/demo/demo.gif)
 
