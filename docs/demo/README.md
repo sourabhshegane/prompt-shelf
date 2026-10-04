@@ -1,7 +1,7 @@
 # Re-recording the demo GIFs
 
-`demo.gif` comes from `demo.steps.mjs`: the whole idea in about 13 seconds. A half-written
-prompt, Ctrl+F parks it, Ctrl+Q brings it back, in a small terminal (80x18) so the input box is
+`demo.gif` comes from `demo.steps.mjs`: the whole idea in under 20 seconds. A half-written
+prompt, Ctrl+F parks it, Ctrl+Q brings it back, then a list of saved prompts, in a small terminal (80x18) so the input box is
 the picture. Nothing is sent to the model. Seed the data folder first, from inside the demo
 folder: `stash add --shelf Common "<prompt>"` for a prompt or two.
 

@@ -1,12 +1,14 @@
 const CTRL_F = '\x06';
 const CTRL_Q = '\x11';
 const ENTER = '\r';
+const ESC = '\x1b';
+const LEFT = '\x1b[D';
 const PICKER_OPEN = /Save to:/;
 const LIST_OPEN = /switch list/;
 
-// The whole idea in about ten seconds, in a small terminal so the input box is the picture: a half-written prompt,
-// Ctrl+F parks it and the box is free, Ctrl+Q brings it back. The save picker and the list
-// show the shelves in passing. Nothing is sent to the model.
+// The whole idea in under 20 seconds, in a small terminal so the input box is the picture: a
+// half-written prompt, Ctrl+F parks it and the box is free, Ctrl+Q brings it back; then a list
+// of saved prompts. Nothing is sent to the model.
 // Seed the data folder with a prompt or two on the Common shelf first (see README.md here).
 export default {
   command: '/opt/homebrew/bin/stash',
@@ -41,6 +43,18 @@ export default {
     { key: ENTER, label: 'Enter', expect: LIST_OPEN },
     { waitFor: LIST_OPEN, gone: true, timeout: 5000 },
     { wait: 300 },
-    { hold: 2000 },
+    { hold: 1500 },
+
+    { caption: ['Lists keep the prompts you reuse.', 'Enter puts one in the box. It stays on the list.'] },
+    { key: CTRL_Q, label: 'Ctrl+Q' },
+    { waitFor: LIST_OPEN, timeout: 5000 },
+    { hold: 600 },
+    { key: LEFT, label: '←' },
+    { waitFor: /Common — /, timeout: 3000 },
+    { wait: 300 },
+    { hold: 2600 },
+    { key: ESC, label: 'Esc', expect: LIST_OPEN },
+    { waitFor: LIST_OPEN, gone: true, timeout: 5000 },
+    { hold: 600 },
   ],
 };
