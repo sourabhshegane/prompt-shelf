@@ -1,5 +1,6 @@
-// Turns a recording from record.mjs into a GIF: the terminal at the bottom, and above it a band
-// with the current caption, so captions never sit on the agent's own text. Blanks account usage
+// Turns a recording from record.mjs into a GIF: the terminal, and right under it (next to the
+// input box, where the eye is) a band with the current caption, so captions never sit on the
+// agent's own text. Blanks account usage
 // lines and Claude's feedback banner, and shortens pauses. A caption is one string or
 // [line, smaller line]; each stays up long enough to read.
 // Usage: node docs/demo/render.mjs <in.cast> <out.gif>
@@ -93,7 +94,7 @@ for (const [name, { rows, font }] of Object.entries(casts)) {
 }
 const [W] = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width', '-of', 'csv=p=0', join(work, 'term.gif')]).toString().trim().split(',').map(Number);
 execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', join(work, 'captions.gif'), '-i', join(work, 'term.gif'), '-filter_complex',
-  `[0]fps=10,scale=${W}:-2:flags=lanczos,pad=iw:ih+3:0:0:color=${DIVIDER}[c];[1]fps=10[t];[c][t]vstack=shortest=0,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
+  `[0]fps=10,scale=${W}:-2:flags=lanczos,pad=iw:ih+3:0:3:color=${DIVIDER}[c];[1]fps=10[t];[t][c]vstack=shortest=0,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
   '-loop', '0', outPath]);
 console.log(`wrote ${outPath} (${(now + HOLD).toFixed(1)}s, ${captions.length} captions)`);
 for (const [i, c] of captions.entries()) console.log(`  ${((captions[i + 1]?.start ?? now + HOLD) - c.start).toFixed(1).padStart(4)}s  ${[c.text].flat()[0]}`);
