@@ -41,6 +41,10 @@ setup: it should say `on PATH: yes` and `claude: shim installed`.
 
 ![park a half-written prompt with Ctrl+F, bring it back with Ctrl+Q](docs/demo/demo.gif)
 
+`Ctrl+Q` is also where your skills and your own lists of reusable prompts live:
+
+![Ctrl+Q shows the stash, the skills Claude can use, and shelves of reusable prompts](docs/demo/lists.gif)
+
 ## Why not Claude Code's `Ctrl+S`?
 
 | | Claude `Ctrl+S` | prompt-shelf |
