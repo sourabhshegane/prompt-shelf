@@ -1,5 +1,5 @@
 // Drives a real agent session through a PTY and writes an asciicast (v2).
-// Steps: { wait }, { type, speed }, { key }, { paste }, { caption }, { waitFor, timeout }.
+// Steps: { wait }, { type, speed }, { key }, { paste }, { caption }, { waitFor, timeout }, { fastForward }.
 // { waitFor } polls the screen until it matches (or, with `gone: true`, stops matching) and
 // aborts after `timeout` ms, so the script follows what the agent really does.
 // { caption } writes an asciicast marker; render.mjs shows it under the terminal.
@@ -44,6 +44,8 @@ const typeText = async (text, perKey = 45) => {
 for (const step of steps) {
   if (step.wait) await sleep(step.wait);
   if (step.caption) events.push([at(), 'm', step.caption]);
+  // Waiting on the agent plays faster in the GIF; render.mjs reads these markers.
+  if (step.fastForward !== undefined) events.push([at(), 'm', step.fastForward ? '\u0000ff-on' : '\u0000ff-off']);
   if (step.waitFor) {
     const deadline = Date.now() + (step.timeout ?? 30000);
     while (step.waitFor.test(screenText()) === Boolean(step.gone)) {
