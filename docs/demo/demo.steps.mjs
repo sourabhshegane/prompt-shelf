@@ -23,11 +23,11 @@ export default {
     { waitFor: /prompt-shelf on/, gone: true, timeout: 12000 },
     { trimStart: true },
 
-    { caption: 'Halfway through a prompt...' },
+    { caption: ['Halfway through a prompt...', '...and Claude needs something else first?'] },
     { type: 'add retries with backoff to upload.js, and', speed: 28 },
     { hold: 500 },
 
-    { caption: ['Ctrl+F parks it.', 'The box is free again.'] },
+    { caption: ['Ctrl+F parks it.', 'The box is clear again.'] },
     { key: CTRL_F, label: 'Ctrl+F' },
     { waitFor: PICKER_OPEN, timeout: 5000 },
     { hold: 700 },
@@ -36,7 +36,7 @@ export default {
     { wait: 300 },
     { hold: 1600 },
 
-    { caption: ['Ctrl+Q brings it back.', 'Enter puts it in the box.'] },
+    { caption: ['Ctrl+Q brings it back.', 'Pick it, press Enter.'] },
     { key: CTRL_Q, label: 'Ctrl+Q' },
     { waitFor: LIST_OPEN, timeout: 5000 },
     { wait: 300 },
@@ -46,7 +46,7 @@ export default {
     { wait: 300 },
     { hold: 1500 },
 
-    { caption: ['Lists keep the prompts you reuse.', 'Enter puts one in the box. It stays on the list.'] },
+    { caption: ['Prompts you reuse?', 'Keep them in lists, one Enter away.'] },
     { key: CTRL_Q, label: 'Ctrl+Q' },
     { waitFor: LIST_OPEN, timeout: 5000 },
     { hold: 600 },
@@ -56,6 +56,6 @@ export default {
     { hold: 2600 },
     { key: ESC, label: 'Esc', expect: LIST_OPEN },
     { waitFor: LIST_OPEN, gone: true, timeout: 5000 },
-    { hold: 600 },
+    { caption: ['npm i -g prompt-shelf', 'For Claude Code and Codex.'] },
   ],
 };

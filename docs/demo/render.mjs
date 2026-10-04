@@ -1,10 +1,11 @@
 // Turns a recording from record.mjs into a GIF. A small camera window (VIEW_ROWS tall, full
 // width) sits on whatever is acting: the input box with the save picker and toasts just above
-// it, or the top of the list (tabs and the selected entry) while the list is open. It pans
-// between them, so the action is always in the same place; the caption sits in a fixed strip
-// right under the window, with a badge naming each key as it is pressed. Also blanks account
-// usage lines and Claude's feedback banner, shortens pauses, and honours the recorder's
-// markers (hold, trimStart, fastForward). A caption is one string or [line, smaller line].
+// it, or the top of the list (tabs and the selected entry) while the list is open, and pans
+// between them. Each caption is a card shown in that same window before its step, so the
+// message appears exactly where the viewer is already looking; a badge in the window's corner
+// names each key as it is pressed. Also blanks account usage lines and Claude's feedback
+// banner, shortens pauses, and honours the recorder's markers (hold, trimStart, fastForward).
+// A caption is one string or [line, smaller line].
 // Usage: node docs/demo/render.mjs <in.cast> <out.gif>
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -16,14 +17,12 @@ const [, , inPath, outPath] = process.argv;
 const IDLE = 1.5; // longest pause kept, in seconds
 const FAST = 4; // speed-up between fastForward markers
 const HOLD = 3; // last frame stays up this long
-const READ_BASE = 1.2;
-const READ_PER_WORD = 0.28;
-const READ_MIN = 2.8;
-const readingTime = (text) => Math.max(READ_MIN, READ_BASE + [text].flat().join(' ').split(/\s+/).filter(Boolean).length * READ_PER_WORD);
 const FONT = 18;
-// The caption strip: its own background, a shade off the terminal's, so it reads as separate.
+// The caption cards: their own background, a shade off the terminal's, so they read as cards.
+const CARD_SECONDS = 1.6;
+const CARD_FONT = 30;
 const CAPTION_THEME = '1d2229,e8e8e8,000000,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,d9d9d9,4d4d4d,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,ffffff';
-const BADGE_SECONDS = 1.4;
+const BADGE_SECONDS = 1.2;
 const AMBER = '\x1b[1;38;5;214m';
 const SUB = '\x1b[38;5;250m';
 const RESET = '\x1b[0m';
@@ -62,27 +61,20 @@ for (const line of lines) {
   else if (marker?.startsWith('key:')) events.push({ t: now, type: 'k', data: marker.slice(4) });
   else if (type === 'm' || type === 'o') events.push({ t: now, type, data });
 }
-// Pass 2: each caption stays up long enough to read; the screen holds on its result if needed.
-const markerIdx = events.flatMap((e, i) => (e.type === 'm' ? [i] : []));
-const holds = new Map();
-markerIdx.forEach((mi, k) => {
-  const start = k === 0 ? 0 : events[mi].t;
-  const next = markerIdx[k + 1];
-  const natural = (next === undefined ? now + HOLD : events[next].t) - start;
-  holds.set(next ?? events.length, Math.max(0, readingTime(events[mi].data) - natural));
-});
+// Pass 2: each caption becomes a card; the screen waits behind it, so the step after it starts
+// when the card is gone.
 let shift = 0;
 const output = [];
 const captions = [];
 const keyPresses = [];
-events.forEach((e, i) => {
-  shift += holds.get(i) ?? 0;
+for (const e of events) {
   const t = e.t + shift;
-  if (e.type === 'm') captions.push({ start: captions.length ? t : 0, text: e.data });
-  else if (e.type === 'k') keyPresses.push({ t, label: e.data });
+  if (e.type === 'm') {
+    captions.push({ start: t, text: e.data });
+    shift += CARD_SECONDS;
+  } else if (e.type === 'k') keyPresses.push({ t, label: e.data });
   else output.push(JSON.stringify([t, 'o', clean(e.data)]));
-});
-shift += holds.get(events.length) ?? 0;
+}
 now += shift;
 output.push(JSON.stringify([now, 'o', '']));
 const end = now + HOLD;
@@ -110,9 +102,9 @@ for (const [t, listTop] of screens) {
   if (top !== stops.at(-1)?.[1]) stops.push([t, top]);
 }
 const work = mkdtempSync(join(tmpdir(), 'prompt-shelf-demo-'));
-const agg = (name, rows, theme = 'asciinema') => {
+const agg = (name, rows, font = FONT, theme = 'asciinema') => {
   writeFileSync(join(work, `${name}.cast`), rows.join('\n') + '\n');
-  execFileSync('agg', ['--font-size', String(FONT), '--theme', theme, '--speed', '1', '--idle-time-limit', '1000', '--last-frame-duration', String(HOLD), join(work, `${name}.cast`), join(work, `${name}.gif`)], { stdio: 'ignore' });
+  execFileSync('agg', ['--font-size', String(font), '--theme', theme, '--speed', '1', '--idle-time-limit', '1000', '--last-frame-duration', String(HOLD), join(work, `${name}.cast`), join(work, `${name}.gif`)], { stdio: 'ignore' });
   const [w, h] = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', join(work, `${name}.gif`)]).toString().trim().split(',').map(Number);
   return { w, h };
 };
@@ -131,33 +123,35 @@ const viewY = stops.reduce((rest, [t, top], i) => {
   return `if(gte(t\\,${start})\\,${from}+${to - from}*min(1\\,(t-${start})/${PAN})\\,${rest})`;
 }, String(yOf(stops[0]?.[1] ?? boxView)));
 
-// The caption strip: the same width and font as the terminal, two rows, a badge at the right.
-const drawCaption = (c, badge) => {
+// The cards: big text centred in a recording the window's shape, scaled to fit it exactly.
+const cardChar = (agg('k20', still(20, 1), CARD_FONT).w - agg('k10', still(10, 1), CARD_FONT).w) / 10;
+const cardRow = agg('k2', still(10, 2), CARD_FONT).h - agg('k1', still(10, 1), CARD_FONT).h;
+const cardCols = Math.round(term.w / cardChar);
+const cardRows = Math.max(3, Math.round(viewH / cardRow));
+const centre = (text) => ' '.repeat(Math.max(0, Math.floor((cardCols - text.length) / 2)));
+const drawCard = (c) => {
   const [line, sub = ''] = [c.text].flat();
-  const tag = badge ? `\x1b[1;${Math.max(1, width - badge.length - 2)}H\x1b[7;1;38;5;214m ${badge} ${RESET}` : '';
-  return `\x1b[2J\x1b[1;1H\x1b[1m${highlight(line, '\x1b[1m')}${RESET}\x1b[2;1H${SUB}${highlight(sub, SUB)}${RESET}${tag}`;
+  const top = Math.max(1, Math.floor((cardRows - (sub ? 2 : 1)) / 2) + 1);
+  const second = sub ? `\x1b[${top + 1};1H${centre(sub)}${SUB}${highlight(sub, SUB)}${RESET}` : '';
+  return `\x1b[2J\x1b[${top};1H${centre(line)}\x1b[1m${highlight(line, '\x1b[1m')}${RESET}${second}`;
 };
-for (const c of captions) {
-  const [line, sub = ''] = [c.text].flat();
-  if (line.length > width - 14 || sub.length > width) console.warn(`caption may collide with a key badge or wrap: ${line}`);
-}
-const captionAt = (t) => captions.findLast((c) => c.start <= t) ?? captions[0];
-const captionEvents = [
-  ...captions.map((c) => [c.start, drawCaption(c)]),
-  ...keyPresses.flatMap(({ t, label }, i) => {
-    const off = t + BADGE_SECONDS;
-    const next = keyPresses[i + 1]?.t ?? Infinity;
-    return [[t, drawCaption(captionAt(t), label)], ...(next < off ? [] : [[off, drawCaption(captionAt(off))]])];
-  }),
-]
-  .sort((a, b) => a[0] - b[0])
-  .map(([t, data]) => [t, 'o', data]);
-captionEvents.unshift([0, 'o', '\x1b[?25l']);
-captionEvents.push([now, 'o', '']);
-agg('captions', [JSON.stringify({ version: 2, width, height: 2 }), ...captionEvents.map((e) => JSON.stringify(e))], CAPTION_THEME);
+for (const c of captions) for (const text of [c.text].flat()) if (text.length > cardCols - 4) console.warn(`card text too long (max ${cardCols - 4}): ${text}`);
+agg('cards', [JSON.stringify({ version: 2, width: cardCols, height: cardRows }), JSON.stringify([0, 'o', '\x1b[?25l']), ...captions.map((c) => JSON.stringify([c.start, 'o', drawCard(c)])), JSON.stringify([end, 'o', ''])], CARD_FONT, CAPTION_THEME);
+const showCards = captions.map((c) => `between(t,${c.start.toFixed(2)},${(c.start + CARD_SECONDS).toFixed(2)})`).join('+') || '0';
 
-execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', join(work, 'term.gif'), '-i', join(work, 'captions.gif'), '-filter_complex',
-  `[0]fps=10,crop=iw:${viewH}:0:'${viewY}'[t];[1]fps=10,scale=${term.w}:-2[c];[t][c]vstack=shortest=0,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
+// The key badge: drawn on the terminal's own background, which is keyed out over the window.
+const BADGE_COLS = 10;
+const badgeEvents = keyPresses.flatMap(({ t, label }, i) => {
+  const off = t + BADGE_SECONDS;
+  const next = keyPresses[i + 1]?.t ?? Infinity;
+  const draw = `\x1b[2J\x1b[1;${BADGE_COLS - label.length - 1}H\x1b[7;1;38;5;214m ${label} ${RESET}`;
+  return [[t, draw], ...(next < off ? [] : [[off, '\x1b[2J']])];
+});
+const badge = agg('badge', [JSON.stringify({ version: 2, width: BADGE_COLS, height: 1 }), JSON.stringify([0, 'o', '\x1b[?25l']), ...badgeEvents.map(([t, d]) => JSON.stringify([t, 'o', d])), JSON.stringify([end, 'o', ''])]);
+
+execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', join(work, 'term.gif'), '-i', join(work, 'cards.gif'), '-i', join(work, 'badge.gif'), '-filter_complex',
+  `[0]fps=10,crop=iw:${viewH}:0:'${viewY}'[t];[1]fps=10,scale=${term.w}:${viewH}[c];[t][c]overlay=0:0:enable='${showCards}':shortest=0[v];` +
+  `[2]fps=10,colorkey=0x121314:0.08:0[k];[v][k]overlay=${term.w - badge.w - 6}:4:enable='lt(${showCards}\\,1)':shortest=0,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
   '-loop', '0', outPath]);
-console.log(`wrote ${outPath} (${end.toFixed(1)}s, ${captions.length} captions, ${stops.length} camera stops)`);
-for (const [i, c] of captions.entries()) console.log(`  ${((captions[i + 1]?.start ?? end) - c.start).toFixed(1).padStart(4)}s  ${[c.text].flat()[0]}`);
+console.log(`wrote ${outPath} (${end.toFixed(1)}s, ${captions.length} cards, ${stops.length} camera stops)`);
+for (const [i, c] of captions.entries()) console.log(`  ${(c.start).toFixed(1).padStart(5)}s  ${[c.text].flat()[0]}`);

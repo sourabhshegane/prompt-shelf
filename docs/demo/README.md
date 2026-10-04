@@ -22,6 +22,6 @@ node docs/demo/render.mjs /tmp/demo.cast docs/demo/demo.gif
 captions, key names, holds, `trimStart` (skip the agent's start-up) and `fastForward`.
 `render.mjs` blanks account usage lines and Claude's feedback banner, shortens pauses, adds the
 holds, and shows a 7-row camera window that sits on whatever is acting (the input box, or the top
-of the list while it is open) and pans between them, so the action always stays in the same place.
-The caption sits in a fixed strip right under that window, with a badge naming each key as it is
-pressed.
+of the list while it is open) and pans between them. Each caption is a card shown in that same
+window before its step, so the message appears where the viewer is already looking, and a badge
+in the window's corner names each key as it is pressed.
