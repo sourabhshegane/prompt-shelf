@@ -17,8 +17,8 @@ const READ_BASE = 1.2;
 const READ_PER_WORD = 0.28;
 const READ_MIN = 2.8;
 const readingTime = (text) => Math.max(READ_MIN, READ_BASE + [text].flat().join(' ').split(/\s+/).filter(Boolean).length * READ_PER_WORD);
-const TERM_FONT = 15;
-const CAPTION_FONT = 17;
+const TERM_FONT = 18;
+const CAPTION_FONT = 19;
 // The caption box: its own background (agg's custom theme: background, foreground, 16 colours).
 const CAPTION_THEME = '1a1e24,e8e8e8,000000,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,d9d9d9,4d4d4d,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,ffffff';
 const CAPTION_BORDER = '0x2c323a';
@@ -53,7 +53,10 @@ for (const line of lines) {
   now += Math.min(t - last, IDLE) / (fast ? FAST : 1);
   last = t;
   const marker = type === 'm' && typeof data === 'string' && data.startsWith('\u0000') ? data.slice(1) : null;
-  if (marker?.startsWith('ff-')) fast = marker === 'ff-on';
+  if (marker === 'start') {
+    for (const e of events) e.t = 0;
+    now = 0;
+  } else if (marker?.startsWith('ff-')) fast = marker === 'ff-on';
   else if (marker?.startsWith('hold:')) now += Number(marker.slice(5)) / 1000;
   else if (marker?.startsWith('key:')) events.push({ t: now, type: 'k', data: marker.slice(4) });
   else if (type === 'm' || type === 'o') events.push({ t: now, type, data });
@@ -85,6 +88,7 @@ output.push(JSON.stringify([now, 'o', '']));
 // Top row of the action at the bottom: the stash list or save picker when one is open, else the
 // agent's working line or a toast right above the input box, else the input box's top border
 // (the second-last full-width rule on screen).
+const ROOM_ROWS = 4; // rows a caption box needs, with a little air
 const actionTop = (term) => {
   const b = term.buffer.active;
   const text = (y) => b.getLine(y)?.translateToString(true) ?? '';
@@ -92,7 +96,16 @@ const actionTop = (term) => {
   for (let y = 0; y < term.rows; y++) if (/^─{20,}/.test(text(y))) rules.push(y);
   const border = rules.at(-2);
   if (border === undefined) return null;
-  for (let y = border - 1; y >= 0 && y >= border - 14; y--) if (/←→ switch list|^ ?Save to:/.test(text(y))) return y;
+  for (let y = border - 1; y >= 0 && y >= border - 14; y--) {
+    if (!/←→ switch list|^ ?Save to:/.test(text(y))) continue;
+    // A tall list near the top leaves no room above it: use its first empty stretch instead, so
+    // the caption sits under the entries rather than on the tabs.
+    if (y >= ROOM_ROWS) return y;
+    for (let gap = y + 1; gap + ROOM_ROWS < border; gap++) {
+      if (Array.from({ length: ROOM_ROWS + 1 }, (_, i) => text(gap + i).trim()).every((t) => !t)) return gap + ROOM_ROWS;
+    }
+    return y;
+  }
   for (let y = border - 1; y >= border - 3 && y >= 0; y--) if (/^\S \S+…/.test(text(y))) return y;
   return text(border - 1).trim() ? border - 1 : border;
 };
@@ -123,8 +136,8 @@ const term = agg('term', [header, ...output], TERM_FONT);
 const rowPx = agg('row2', still(width, 2), TERM_FONT).h - agg('row1', still(width, 1), TERM_FONT).h;
 const padPx = (term.h - height * rowPx) / 2;
 // The camera: zoomed in on the bottom-left, where the action and its caption are, so they fill
-// the frame. Full view for the title, the end card, and when the list is open (it needs room).
-const ZOOM_MAX = 1.6;
+// the frame; it eases out as far as the list needs when the list opens.
+const ZOOM_MAX = 1; // a small terminal at a large font needs no zoom; raise this for a big one
 const EASE = 0.5; // seconds to move from one zoom level to the next
 const LEAD = 0.15; // the box and camera move this much before the screen changes
 // The caption box: narrow enough to stay in view at full zoom.
@@ -151,6 +164,9 @@ const captionEvents = [
   .map(([t, data]) => [t, 'o', data]);
 captionEvents.unshift([0, 'o', '\x1b[?25l']);
 captionEvents.push([now, 'o', '']);
+for (const c of captions) {
+  for (const text of [c.text].flat()) if (text.length > capCols - 10) console.warn(`caption may collide with a key badge or wrap (max ${capCols - 10} chars): ${text}`);
+}
 const cap = agg('captions', [JSON.stringify({ version: 2, width: capCols, height: 2 }), ...captionEvents.map((e) => JSON.stringify(e))], CAPTION_FONT, CAPTION_THEME);
 
 const yAt = (top) => Math.max(MARGIN, Math.round(padPx + top * rowPx - cap.h - MARGIN / 2));
@@ -159,15 +175,14 @@ const y = segments.reduce((rest, [start, top]) => `if(gte(t\\,${Math.max(0, star
 
 // Zoom so the view's top edge sits just above the caption box; the view is anchored bottom-left.
 const zoomFor = (top) => Math.min(ZOOM_MAX, Math.max(1, term.h / (term.h - yAt(top) + MARGIN)));
-const zoomedFrom = captions[1]?.start ?? 0;
-const zoomedUntil = captions.at(-1)?.start ?? end;
-const changes = [[0, 1]];
+const zoomedFrom = 0;
+const zoomedUntil = end;
+const changes = [[0, zoomFor(segments.find(([t]) => t > 0)?.[1] ?? height - 4)]];
 for (const [start, top] of segments) {
   const t = Math.max(zoomedFrom, Math.min(zoomedUntil, start)) - LEAD;
   const z = start >= zoomedUntil ? 1 : zoomFor(top);
   if (z !== changes.at(-1)[1]) changes.push([Math.max(0, t), z]);
 }
-changes.push([Math.max(0, zoomedUntil - LEAD), 1]);
 changes.sort((a, b) => a[0] - b[0]);
 const zoomExpr = changes.reduce((rest, [t, z], i) => {
   const from = i === 0 ? 1 : changes[i - 1][1];
