@@ -1,5 +1,5 @@
 // Drives a real agent session through a PTY and writes an asciicast (v2).
-// Steps: { wait }, { type, speed }, { key }, { paste }, { caption }, { waitFor, timeout }, { fastForward }.
+// Steps: { wait }, { type, speed }, { key }, { paste }, { caption }, { waitFor, timeout }, { fastForward }, { hold }; { key, label } names the key.
 // { waitFor } polls the screen until it matches (or, with `gone: true`, stops matching) and
 // aborts after `timeout` ms, so the script follows what the agent really does.
 // { caption } writes an asciicast marker; render.mjs shows it under the terminal.
@@ -45,6 +45,8 @@ for (const step of steps) {
   if (step.wait) await sleep(step.wait);
   if (step.caption) events.push([at(), 'm', step.caption]);
   // Waiting on the agent plays faster in the GIF; render.mjs reads these markers.
+  // A pause the GIF keeps in full (render.mjs adds it), to let a result sink in.
+  if (step.hold) events.push([at(), 'm', `\u0000hold:${step.hold}`]);
   if (step.fastForward !== undefined) events.push([at(), 'm', step.fastForward ? '\u0000ff-on' : '\u0000ff-off']);
   if (step.waitFor) {
     const deadline = Date.now() + (step.timeout ?? 30000);
@@ -64,6 +66,8 @@ for (const step of steps) {
     pty.kill();
     process.exit(1);
   }
+  // The key's name, shown as a badge in the caption box when it is pressed.
+  if (step.key && step.label) events.push([at(), 'm', `\u0000key:${step.label}`]);
   if (step.key) pty.write(step.key);
 }
 await sleep(600);

@@ -52,7 +52,10 @@ for (const line of lines) {
   const [t, type, data] = JSON.parse(line);
   now += Math.min(t - last, IDLE) / (fast ? FAST : 1);
   last = t;
-  if (type === 'm' && typeof data === 'string' && data.startsWith('\u0000ff-')) fast = data === '\u0000ff-on';
+  const marker = type === 'm' && typeof data === 'string' && data.startsWith('\u0000') ? data.slice(1) : null;
+  if (marker?.startsWith('ff-')) fast = marker === 'ff-on';
+  else if (marker?.startsWith('hold:')) now += Number(marker.slice(5)) / 1000;
+  else if (marker?.startsWith('key:')) events.push({ t: now, type: 'k', data: marker.slice(4) });
   else if (type === 'm' || type === 'o') events.push({ t: now, type, data });
 }
 // Pass 2: give each caption its reading time by holding the screen at the end of its segment.
@@ -67,10 +70,12 @@ markerIdx.forEach((mi, k) => {
 let shift = 0;
 const output = [];
 const captions = [];
+const keyPresses = [];
 events.forEach((e, i) => {
   shift += holds.get(i) ?? 0;
   const t = e.t + shift;
   if (e.type === 'm') captions.push({ start: captions.length ? t : 0, text: e.data });
+  else if (e.type === 'k') keyPresses.push({ t, label: e.data });
   else output.push(JSON.stringify([t, 'o', clean(e.data)]));
 });
 shift += holds.get(events.length) ?? 0;
@@ -126,11 +131,25 @@ const LEAD = 0.15; // the box and camera move this much before the screen change
 const charPx = (agg('c20', still(20, 1), CAPTION_FONT).w - agg('c10', still(10, 1), CAPTION_FONT).w) / 10;
 const capPad = agg('c10', still(10, 1), CAPTION_FONT).w - 10 * charPx;
 const capCols = Math.floor((term.w / ZOOM_MAX - 2 * MARGIN - capPad) / charPx);
-const captionEvents = [[0, 'o', '\x1b[?25l']];
-for (const c of captions) {
+// Each caption, plus a badge naming the key for a moment after it is pressed.
+const BADGE_SECONDS = 1.4;
+const drawCaption = (c, badge) => {
   const [line, sub = ''] = [c.text].flat();
-  captionEvents.push([c.start, 'o', `\x1b[2J\x1b[1;1H\x1b[1m${highlight(line, '\x1b[1m')}${RESET}\x1b[2;1H${SUB}${highlight(sub, SUB)}${RESET}`]);
-}
+  const tag = badge ? `\x1b[2;${Math.max(1, capCols - badge.length - 1)}H\x1b[7;1;38;5;214m ${badge} ${RESET}` : '';
+  return `\x1b[2J\x1b[1;1H\x1b[1m${highlight(line, '\x1b[1m')}${RESET}\x1b[2;1H${SUB}${highlight(sub, SUB)}${RESET}${tag}`;
+};
+const captionAt = (t) => captions.findLast((c) => c.start <= t) ?? captions[0];
+const captionEvents = [
+  ...captions.map((c) => [c.start, drawCaption(c)]),
+  ...keyPresses.flatMap(({ t, label }, i) => {
+    const off = t + BADGE_SECONDS;
+    const next = keyPresses[i + 1]?.t ?? Infinity;
+    return [[t, drawCaption(captionAt(t), label)], ...(next < off ? [] : [[off, drawCaption(captionAt(off))]])];
+  }),
+]
+  .sort((a, b) => a[0] - b[0])
+  .map(([t, data]) => [t, 'o', data]);
+captionEvents.unshift([0, 'o', '\x1b[?25l']);
 captionEvents.push([now, 'o', '']);
 const cap = agg('captions', [JSON.stringify({ version: 2, width: capCols, height: 2 }), ...captionEvents.map((e) => JSON.stringify(e))], CAPTION_FONT, CAPTION_THEME);
 
