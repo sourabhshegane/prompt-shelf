@@ -1,5 +1,5 @@
 // Drives a real agent session through a PTY and writes an asciicast (v2).
-// Steps: { wait }, { type, speed }, { key }, { paste }, { caption }, { waitFor, timeout }, { fastForward }, { hold }; { key, label } names the key.
+// Steps: { wait }, { type, speed }, { key }, { paste }, { caption }, { waitFor, timeout }, { fastForward }, { hold }, { trimStart }; { key, label } names the key.
 // { waitFor } polls the screen until it matches (or, with `gone: true`, stops matching) and
 // aborts after `timeout` ms, so the script follows what the agent really does.
 // { caption } writes an asciicast marker; render.mjs shows it under the terminal.
@@ -45,6 +45,8 @@ for (const step of steps) {
   if (step.wait) await sleep(step.wait);
   if (step.caption) events.push([at(), 'm', step.caption]);
   // Waiting on the agent plays faster in the GIF; render.mjs reads these markers.
+  // Everything before this step plays in no time: the GIF opens on the screen as it is here.
+  if (step.trimStart) events.push([at(), 'm', '\u0000start']);
   // A pause the GIF keeps in full (render.mjs adds it), to let a result sink in.
   if (step.hold) events.push([at(), 'm', `\u0000hold:${step.hold}`]);
   if (step.fastForward !== undefined) events.push([at(), 'm', step.fastForward ? '\u0000ff-on' : '\u0000ff-off']);

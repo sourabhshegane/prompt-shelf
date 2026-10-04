@@ -1,9 +1,10 @@
 # Re-recording the demo GIFs
 
-`demo.gif` comes from `demo.steps.mjs`: halfway through a prompt, Ctrl+F parks it, a short
-question goes to `--model haiku`, Ctrl+Q brings the draft back, then a glance at the skills and a
-shelf. One story, numbered captions. Seed the data folder first, from inside the demo folder:
-`stash add --shelf Common "<prompt>"` for two or three prompts.
+`demo.gif` comes from `demo.steps.mjs`: the whole idea in under 20 seconds. A half-written
+prompt, Ctrl+F parks it, Ctrl+Q brings it back, then a list of saved prompts. The terminal is
+80x16 so the list (11 rows) opens right on top of the input box, and nothing is sent to the
+model. Seed the data folder first, from inside the demo folder, so the list is full:
+`STASH=stash sh docs/demo/seed.sh` (path relative to this repo).
 
 Needs `agg` and `ffmpeg` (`brew install agg ffmpeg`) and a folder Claude Code already trusts,
 e.g. `~/Documents/personal-projects/demo-app`. Record with `PROMPT_SHELF_DIR` pointing at an
@@ -17,8 +18,10 @@ DEMO_CWD=~/Documents/personal-projects/demo-app node docs/demo/record.mjs "$PWD/
 node docs/demo/render.mjs /tmp/demo.cast docs/demo/demo.gif
 ```
 
-`record.mjs` drives a real Claude Code session through a PTY and saves an asciicast with caption
-markers (and `fastForward` markers around waits on the agent). `render.mjs` blanks account
-usage lines and Claude's feedback banner, shortens pauses, plays fast-forwarded stretches at
-4x, pins each caption just above where the action is (input box, toast, picker or list), and
-zooms the camera in on that spot, easing out to the full screen when the list opens.
+`record.mjs` drives a real Claude Code session through a PTY and saves an asciicast with markers:
+captions, key names, holds, `trimStart` (skip the agent's start-up) and `fastForward`.
+`render.mjs` blanks account usage lines and Claude's feedback banner, shortens pauses, adds the
+holds, and shows a 7-row camera window that sits on whatever is acting (the input box, or the top
+of the list while it is open) and pans between them. Each caption is a card shown in that same
+window before its step, so the message appears where the viewer is already looking, and a badge
+in the window's corner names each key as it is pressed.
