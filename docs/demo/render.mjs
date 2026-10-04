@@ -1,13 +1,14 @@
-// Turns a recording from record.mjs into a GIF: the terminal, and right under it (next to the
-// input box, where the eye is) a band with the current caption, so captions never sit on the
-// agent's own text. Blanks account usage
-// lines and Claude's feedback banner, and shortens pauses. A caption is one string or
-// [line, smaller line]; each stays up long enough to read.
+// Turns a recording from record.mjs into a GIF. Each caption is a box with its own background,
+// pinned just above where the action is (the input box, a toast, the save picker or the list),
+// so the eye never leaves that spot and the caption never mixes with the agent's text. Blanks
+// account usage lines and Claude's feedback banner, and shortens pauses. A caption is one string
+// or [line, smaller line]; each stays up long enough to read.
 // Usage: node docs/demo/render.mjs <in.cast> <out.gif>
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import xterm from '@xterm/headless';
 
 const [, , inPath, outPath] = process.argv;
 const IDLE = 1.5; // longest pause kept, in seconds
@@ -16,13 +17,15 @@ const READ_BASE = 1.2;
 const READ_PER_WORD = 0.28;
 const READ_MIN = 2.8;
 const readingTime = (text) => Math.max(READ_MIN, READ_BASE + [text].flat().join(' ').split(/\s+/).filter(Boolean).length * READ_PER_WORD);
-// The caption band: bigger text than the terminal, scaled to the terminal's width.
-const CAPTION_FONT = 24;
-const CAPTION_ROWS = 3; // blank, caption, smaller line
+const TERM_FONT = 15;
+const CAPTION_FONT = 17;
+// The caption box: its own background (agg's custom theme: background, foreground, 16 colours).
+const CAPTION_THEME = '1c2530,e8e8e8,000000,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,d9d9d9,4d4d4d,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,ffffff';
+const CAPTION_BORDER = '0x3b4b5e';
+const MARGIN = 14; // px between the box and the terminal's sides, and above the action
 const AMBER = '\x1b[1;38;5;214m';
 const SUB = '\x1b[38;5;250m';
 const RESET = '\x1b[0m';
-const DIVIDER = '0x3a3d41';
 // Keys and the install command stand out in the caption.
 const highlight = (text, after) => text.replace(/Ctrl\+[A-Z]|Enter|npm i -g prompt-shelf/g, (k) => AMBER + k + RESET + after);
 
@@ -37,7 +40,7 @@ const blankPromo = (segment) => segment.replace(/\x1b\]8;[^\x07]*\x07|\x1b\[[0-9
 const clean = (text) => text.replace(usage, blankText).replace(promo, blankPromo).replace(/ /g, ' ');
 
 const [header, ...lines] = readFileSync(inPath, 'utf8').trim().split('\n');
-const { width } = JSON.parse(header);
+const { width, height } = JSON.parse(header);
 
 // Pass 1: shorten long pauses.
 const events = [];
@@ -74,27 +77,65 @@ shift += holds.get(events.length) ?? 0;
 now += shift;
 output.push(JSON.stringify([now, 'o', '']));
 
-// The caption band, as its own small recording.
-const capCols = Math.round((width * 15) / CAPTION_FONT);
+// Top row of the action at the bottom: the stash list or save picker when one is open, else the
+// agent's working line or a toast right above the input box, else the input box's top border
+// (the second-last full-width rule on screen).
+const actionTop = (term) => {
+  const b = term.buffer.active;
+  const text = (y) => b.getLine(y)?.translateToString(true) ?? '';
+  const rules = [];
+  for (let y = 0; y < term.rows; y++) if (/^─{20,}/.test(text(y))) rules.push(y);
+  const border = rules.at(-2);
+  if (border === undefined) return null;
+  for (let y = border - 1; y >= 0 && y >= border - 14; y--) if (/←→ switch list|^ ?Save to:/.test(text(y))) return y;
+  for (let y = border - 1; y >= border - 3 && y >= 0; y--) if (/^\S \S+…/.test(text(y))) return y;
+  return text(border - 1).trim() ? border - 1 : border;
+};
+
+const end = now + HOLD;
+captions.forEach((c, i) => (c.end = captions[i + 1]?.start ?? end));
+// Replay the screen and note where the action is over time, so the caption box follows it (up
+// when the list opens, back down when it closes).
+const replay = new xterm.Terminal({ cols: width, rows: height, allowProposedApi: true, scrollback: 0 });
+const segments = []; // [start, top]
+for (const line of output) {
+  const [t, , data] = JSON.parse(line);
+  await new Promise((r) => replay.write(data, r));
+  const top = actionTop(replay);
+  if (top !== null && top !== segments.at(-1)?.[1]) segments.push([t, top]);
+}
+const work = mkdtempSync(join(tmpdir(), 'prompt-shelf-demo-'));
+const agg = (name, rows, font, theme = 'asciinema') => {
+  writeFileSync(join(work, `${name}.cast`), rows.join('\n') + '\n');
+  execFileSync('agg', ['--font-size', String(font), '--theme', theme, '--speed', '1', '--idle-time-limit', '1000', '--last-frame-duration', String(HOLD), join(work, `${name}.cast`), join(work, `${name}.gif`)], { stdio: 'ignore' });
+  const [w, h] = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', join(work, `${name}.gif`)]).toString().trim().split(',').map(Number);
+  return { w, h };
+};
+const still = (cols, rows) => [JSON.stringify({ version: 2, width: cols, height: rows }), JSON.stringify([0, 'o', '']), JSON.stringify([0.1, 'o', ''])];
+
+// The terminal, and its row height and padding (from two empty recordings one row apart).
+const term = agg('term', [header, ...output], TERM_FONT);
+const rowPx = agg('row2', still(width, 2), TERM_FONT).h - agg('row1', still(width, 1), TERM_FONT).h;
+const padPx = (term.h - height * rowPx) / 2;
+// The caption box: as many columns as fit the terminal's width less the margins.
+const charPx = (agg('c20', still(20, 1), CAPTION_FONT).w - agg('c10', still(10, 1), CAPTION_FONT).w) / 10;
+const capPad = agg('c10', still(10, 1), CAPTION_FONT).w - 10 * charPx;
+const capCols = Math.floor((term.w - 2 * MARGIN - capPad) / charPx);
 const captionEvents = [[0, 'o', '\x1b[?25l']];
 for (const c of captions) {
   const [line, sub = ''] = [c.text].flat();
-  captionEvents.push([c.start, 'o', `\x1b[2J\x1b[2;2H\x1b[1m${highlight(line, '\x1b[1m')}${RESET}\x1b[3;2H${SUB}${highlight(sub, SUB)}${RESET}`]);
+  captionEvents.push([c.start, 'o', `\x1b[2J\x1b[1;1H\x1b[1m${highlight(line, '\x1b[1m')}${RESET}\x1b[2;1H${SUB}${highlight(sub, SUB)}${RESET}`]);
 }
 captionEvents.push([now, 'o', '']);
+const cap = agg('captions', [JSON.stringify({ version: 2, width: capCols, height: 2 }), ...captionEvents.map((e) => JSON.stringify(e))], CAPTION_FONT, CAPTION_THEME);
 
-const work = mkdtempSync(join(tmpdir(), 'prompt-shelf-demo-'));
-const casts = {
-  term: { rows: [header, ...output], font: 15 },
-  captions: { rows: [JSON.stringify({ version: 2, width: capCols, height: CAPTION_ROWS + 1 }), ...captionEvents.map((e) => JSON.stringify(e))], font: CAPTION_FONT },
-};
-for (const [name, { rows, font }] of Object.entries(casts)) {
-  writeFileSync(join(work, `${name}.cast`), rows.join('\n') + '\n');
-  execFileSync('agg', ['--font-size', String(font), '--theme', 'asciinema', '--speed', '1', '--idle-time-limit', '1000', '--last-frame-duration', String(HOLD), join(work, `${name}.cast`), join(work, `${name}.gif`)], { stdio: 'ignore' });
-}
-const [W] = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width', '-of', 'csv=p=0', join(work, 'term.gif')]).toString().trim().split(',').map(Number);
-execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', join(work, 'captions.gif'), '-i', join(work, 'term.gif'), '-filter_complex',
-  `[0]fps=10,scale=${W}:-2:flags=lanczos,pad=iw:ih+3:0:3:color=${DIVIDER}[c];[1]fps=10[t];[t][c]vstack=shortest=0,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
+const x = Math.round((term.w - cap.w) / 2);
+const LEAD = 0.15; // the box moves this much before the screen changes, so it never lags behind
+const yAt = (top) => Math.max(MARGIN, Math.round(padPx + top * rowPx - cap.h - MARGIN / 2));
+// Built so the latest screen state is checked first.
+const y = segments.reduce((rest, [start, top]) => `if(gte(t\\,${Math.max(0, start - LEAD).toFixed(2)})\\,${yAt(top)}\\,${rest})`, String(yAt(segments[0]?.[1] ?? height - 4)));
+execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', join(work, 'term.gif'), '-i', join(work, 'captions.gif'), '-filter_complex',
+  `[1]fps=10,drawbox=x=0:y=0:w=iw:h=ih:color=${CAPTION_BORDER}:t=2[c];[0]fps=10[t];[t][c]overlay=x=${x}:y='${y}':eval=frame:shortest=0,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
   '-loop', '0', outPath]);
-console.log(`wrote ${outPath} (${(now + HOLD).toFixed(1)}s, ${captions.length} captions)`);
-for (const [i, c] of captions.entries()) console.log(`  ${((captions[i + 1]?.start ?? now + HOLD) - c.start).toFixed(1).padStart(4)}s  ${[c.text].flat()[0]}`);
+console.log(`wrote ${outPath} (${end.toFixed(1)}s, ${captions.length} captions)`);
+for (const c of captions) console.log(`  ${(c.end - c.start).toFixed(1).padStart(4)}s  ${[c.text].flat()[0]}`);
