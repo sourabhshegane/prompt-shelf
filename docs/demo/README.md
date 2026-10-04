@@ -20,5 +20,5 @@ node docs/demo/render.mjs /tmp/demo.cast docs/demo/demo.gif
 `record.mjs` drives a real Claude Code session through a PTY and saves an asciicast with caption
 markers (and `fastForward` markers around waits on the agent). `render.mjs` blanks account
 usage lines and Claude's feedback banner, shortens pauses, plays fast-forwarded stretches at
-4x, and draws each caption as a box with its own background just above where the action is
-(input box, toast, picker or list), following it as the screen changes.
+4x, pins each caption just above where the action is (input box, toast, picker or list), and
+zooms the camera in on that spot, easing out to the full screen when the list opens.

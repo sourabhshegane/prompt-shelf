@@ -1,6 +1,6 @@
-// Turns a recording from record.mjs into a GIF. Each caption is a box with its own background,
-// pinned just above where the action is (the input box, a toast, the save picker or the list),
-// so the eye never leaves that spot and the caption never mixes with the agent's text. Blanks
+// Turns a recording from record.mjs into a GIF. Each caption is a quiet box pinned just above
+// where the action is (the input box, a toast, the save picker or the list), and the camera
+// zooms in on that spot, so the eye is held where things happen. Blanks
 // account usage lines and Claude's feedback banner, and shortens pauses. A caption is one string
 // or [line, smaller line]; each stays up long enough to read.
 // Usage: node docs/demo/render.mjs <in.cast> <out.gif>
@@ -20,8 +20,8 @@ const readingTime = (text) => Math.max(READ_MIN, READ_BASE + [text].flat().join(
 const TERM_FONT = 15;
 const CAPTION_FONT = 17;
 // The caption box: its own background (agg's custom theme: background, foreground, 16 colours).
-const CAPTION_THEME = '1c2530,e8e8e8,000000,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,d9d9d9,4d4d4d,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,ffffff';
-const CAPTION_BORDER = '0x3b4b5e';
+const CAPTION_THEME = '1a1e24,e8e8e8,000000,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,d9d9d9,4d4d4d,dd3c69,4ebf22,ddaf3c,26b0d7,b954e1,54e1b9,ffffff';
+const CAPTION_BORDER = '0x2c323a';
 const MARGIN = 14; // px between the box and the terminal's sides, and above the action
 const AMBER = '\x1b[1;38;5;214m';
 const SUB = '\x1b[38;5;250m';
@@ -117,10 +117,15 @@ const still = (cols, rows) => [JSON.stringify({ version: 2, width: cols, height:
 const term = agg('term', [header, ...output], TERM_FONT);
 const rowPx = agg('row2', still(width, 2), TERM_FONT).h - agg('row1', still(width, 1), TERM_FONT).h;
 const padPx = (term.h - height * rowPx) / 2;
-// The caption box: as many columns as fit the terminal's width less the margins.
+// The camera: zoomed in on the bottom-left, where the action and its caption are, so they fill
+// the frame. Full view for the title, the end card, and when the list is open (it needs room).
+const ZOOM_MAX = 1.6;
+const EASE = 0.5; // seconds to move from one zoom level to the next
+const LEAD = 0.15; // the box and camera move this much before the screen changes
+// The caption box: narrow enough to stay in view at full zoom.
 const charPx = (agg('c20', still(20, 1), CAPTION_FONT).w - agg('c10', still(10, 1), CAPTION_FONT).w) / 10;
 const capPad = agg('c10', still(10, 1), CAPTION_FONT).w - 10 * charPx;
-const capCols = Math.floor((term.w - 2 * MARGIN - capPad) / charPx);
+const capCols = Math.floor((term.w / ZOOM_MAX - 2 * MARGIN - capPad) / charPx);
 const captionEvents = [[0, 'o', '\x1b[?25l']];
 for (const c of captions) {
   const [line, sub = ''] = [c.text].flat();
@@ -129,13 +134,29 @@ for (const c of captions) {
 captionEvents.push([now, 'o', '']);
 const cap = agg('captions', [JSON.stringify({ version: 2, width: capCols, height: 2 }), ...captionEvents.map((e) => JSON.stringify(e))], CAPTION_FONT, CAPTION_THEME);
 
-const x = Math.round((term.w - cap.w) / 2);
-const LEAD = 0.15; // the box moves this much before the screen changes, so it never lags behind
 const yAt = (top) => Math.max(MARGIN, Math.round(padPx + top * rowPx - cap.h - MARGIN / 2));
 // Built so the latest screen state is checked first.
 const y = segments.reduce((rest, [start, top]) => `if(gte(t\\,${Math.max(0, start - LEAD).toFixed(2)})\\,${yAt(top)}\\,${rest})`, String(yAt(segments[0]?.[1] ?? height - 4)));
+
+// Zoom so the view's top edge sits just above the caption box; the view is anchored bottom-left.
+const zoomFor = (top) => Math.min(ZOOM_MAX, Math.max(1, term.h / (term.h - yAt(top) + MARGIN)));
+const zoomedFrom = captions[1]?.start ?? 0;
+const zoomedUntil = captions.at(-1)?.start ?? end;
+const changes = [[0, 1]];
+for (const [start, top] of segments) {
+  const t = Math.max(zoomedFrom, Math.min(zoomedUntil, start)) - LEAD;
+  const z = start >= zoomedUntil ? 1 : zoomFor(top);
+  if (z !== changes.at(-1)[1]) changes.push([Math.max(0, t), z]);
+}
+changes.push([Math.max(0, zoomedUntil - LEAD), 1]);
+changes.sort((a, b) => a[0] - b[0]);
+const zoomExpr = changes.reduce((rest, [t, z], i) => {
+  const from = i === 0 ? 1 : changes[i - 1][1];
+  return `if(gte(it,${t.toFixed(2)}),${from.toFixed(3)}+${(z - from).toFixed(3)}*min(1,(it-${t.toFixed(2)})/${EASE}),${rest})`;
+}, '1');
+const camera = `scale=${term.w * 2}:${term.h * 2}:flags=lanczos,zoompan=z='${zoomExpr}':x='0':y='ih-ih/zoom':d=1:s=${term.w}x${term.h}:fps=10`;
 execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', join(work, 'term.gif'), '-i', join(work, 'captions.gif'), '-filter_complex',
-  `[1]fps=10,drawbox=x=0:y=0:w=iw:h=ih:color=${CAPTION_BORDER}:t=2[c];[0]fps=10[t];[t][c]overlay=x=${x}:y='${y}':eval=frame:shortest=0,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
+  `[1]fps=10,drawbox=x=0:y=0:w=iw:h=ih:color=${CAPTION_BORDER}:t=1[c];[0]fps=10[t];[t][c]overlay=x=${MARGIN}:y='${y}':eval=frame:shortest=0,${camera},split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
   '-loop', '0', outPath]);
 console.log(`wrote ${outPath} (${end.toFixed(1)}s, ${captions.length} captions)`);
 for (const c of captions) console.log(`  ${(c.end - c.start).toFixed(1).padStart(4)}s  ${[c.text].flat()[0]}`);
