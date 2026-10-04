@@ -21,5 +21,7 @@ node docs/demo/render.mjs /tmp/demo.cast docs/demo/demo.gif
 `record.mjs` drives a real Claude Code session through a PTY and saves an asciicast with markers:
 captions, key names, holds, `trimStart` (skip the agent's start-up) and `fastForward`.
 `render.mjs` blanks account usage lines and Claude's feedback banner, shortens pauses, adds the
-holds, ends the picture at the input box's bottom edge, and puts the caption in one fixed strip
-right under it, with a badge naming each key as it is pressed.
+holds, and shows a 7-row camera window that sits on whatever is acting (the input box, or the top
+of the list while it is open) and pans between them, so the action always stays in the same place.
+The caption sits in a fixed strip right under that window, with a badge naming each key as it is
+pressed.

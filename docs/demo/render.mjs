@@ -1,9 +1,10 @@
-// Turns a recording from record.mjs into a GIF. The viewer watches the agent's input box, so
-// the GIF ends at the box's bottom edge and the caption sits in one fixed strip right under it,
-// with a badge naming each key as it is pressed. Everything the keys do (the save picker, the
-// toast, the list) opens just above the box. Also blanks account usage lines and Claude's
-// feedback banner, shortens pauses, and honours the recorder's markers (hold, trimStart,
-// fastForward). A caption is one string or [line, smaller line].
+// Turns a recording from record.mjs into a GIF. A small camera window (VIEW_ROWS tall, full
+// width) sits on whatever is acting: the input box with the save picker and toasts just above
+// it, or the top of the list (tabs and the selected entry) while the list is open. It pans
+// between them, so the action is always in the same place; the caption sits in a fixed strip
+// right under the window, with a badge naming each key as it is pressed. Also blanks account
+// usage lines and Claude's feedback banner, shortens pauses, and honours the recorder's
+// markers (hold, trimStart, fastForward). A caption is one string or [line, smaller line].
 // Usage: node docs/demo/render.mjs <in.cast> <out.gif>
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -87,19 +88,27 @@ output.push(JSON.stringify([now, 'o', '']));
 const end = now + HOLD;
 
 // The input box's bottom edge: the last full-width rule on screen, lowest seen in the recording.
+const VIEW_ROWS = 7;
+const PAN = 0.4; // seconds to pan from one spot to the next
+const screens = [];
 const replay = new xterm.Terminal({ cols: width, rows: height, allowProposedApi: true, scrollback: 0 });
 let boxBottom = 0;
 for (const line of output) {
-  await new Promise((r) => replay.write(JSON.parse(line)[2], r));
-  const b = replay.buffer.active;
-  for (let y = height - 1; y >= 0; y--) {
-    if (/^─{20,}/.test(b.getLine(y)?.translateToString(true) ?? '')) {
-      boxBottom = Math.max(boxBottom, y);
-      break;
-    }
-  }
+  const [t, , data] = JSON.parse(line);
+  await new Promise((r) => replay.write(data, r));
+  const rows = Array.from({ length: height }, (_, y) => replay.buffer.active.getLine(y)?.translateToString(true) ?? '');
+  const rule = rows.findLastIndex((text) => /^─{20,}/.test(text));
+  if (rule >= 0) boxBottom = Math.max(boxBottom, rule);
+  screens.push([t, rows.findIndex((text) => /←→ switch list/.test(text))]);
 }
-
+// Where the window's top row is over time: on the list's top row while it is open, else so the
+// input box sits at the window's bottom.
+const boxView = Math.max(0, boxBottom - VIEW_ROWS + 1);
+const stops = [];
+for (const [t, listTop] of screens) {
+  const top = listTop >= 0 ? Math.min(listTop, height - VIEW_ROWS) : boxView;
+  if (top !== stops.at(-1)?.[1]) stops.push([t, top]);
+}
 const work = mkdtempSync(join(tmpdir(), 'prompt-shelf-demo-'));
 const agg = (name, rows, theme = 'asciinema') => {
   writeFileSync(join(work, `${name}.cast`), rows.join('\n') + '\n');
@@ -112,7 +121,15 @@ const still = (cols, rows) => [JSON.stringify({ version: 2, width: cols, height:
 const term = agg('term', [header, ...output]);
 const rowPx = agg('row2', still(width, 2)).h - agg('row1', still(width, 1)).h;
 const padPx = (term.h - height * rowPx) / 2;
-const cropH = Math.round(padPx + (boxBottom + 1) * rowPx + rowPx / 3);
+const viewH = Math.round(VIEW_ROWS * rowPx + rowPx / 3);
+const yOf = (top) => Math.round(padPx + top * rowPx - rowPx / 6);
+// Built so the latest stop is checked first; each eases in from the one before.
+const viewY = stops.reduce((rest, [t, top], i) => {
+  const from = yOf(i === 0 ? top : stops[i - 1][1]);
+  const to = yOf(top);
+  const start = Math.max(0, t - PAN / 2).toFixed(2);
+  return `if(gte(t\\,${start})\\,${from}+${to - from}*min(1\\,(t-${start})/${PAN})\\,${rest})`;
+}, String(yOf(stops[0]?.[1] ?? boxView)));
 
 // The caption strip: the same width and font as the terminal, two rows, a badge at the right.
 const drawCaption = (c, badge) => {
@@ -140,7 +157,7 @@ captionEvents.push([now, 'o', '']);
 agg('captions', [JSON.stringify({ version: 2, width, height: 2 }), ...captionEvents.map((e) => JSON.stringify(e))], CAPTION_THEME);
 
 execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', join(work, 'term.gif'), '-i', join(work, 'captions.gif'), '-filter_complex',
-  `[0]fps=10,crop=iw:${cropH}:0:0[t];[1]fps=10,scale=${term.w}:-2[c];[t][c]vstack=shortest=0,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
+  `[0]fps=10,crop=iw:${viewH}:0:'${viewY}'[t];[1]fps=10,scale=${term.w}:-2[c];[t][c]vstack=shortest=0,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none`,
   '-loop', '0', outPath]);
-console.log(`wrote ${outPath} (${end.toFixed(1)}s, ${captions.length} captions, cropped at row ${boxBottom})`);
+console.log(`wrote ${outPath} (${end.toFixed(1)}s, ${captions.length} captions, ${stops.length} camera stops)`);
 for (const [i, c] of captions.entries()) console.log(`  ${((captions[i + 1]?.start ?? end) - c.start).toFixed(1).padStart(4)}s  ${[c.text].flat()[0]}`);
