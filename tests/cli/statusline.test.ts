@@ -13,11 +13,11 @@ describe('stash statusline', () => {
   });
 
   it('counts the drafts parked in this folder only', () => {
-    expect(statusText({ ...base, prompts: [draft('/repo'), draft('/repo'), draft('/other')] })).toBe('⌁ 2 parked · ctrl+q');
+    expect(statusText({ ...base, prompts: [draft('/repo'), draft('/repo'), draft('/other')] })).toBe('prompt-shelf · 2 parked · ctrl+q');
   });
 
   it('shows the keys when nothing is parked, and nothing outside a stash session', () => {
-    expect(statusText({ ...base, prompts: [] })).toBe('⌁ stash · ctrl+f park · ctrl+q list');
+    expect(statusText({ ...base, prompts: [] })).toBe('prompt-shelf · ctrl+f park · ctrl+q list');
     expect(statusText({ ...base, prompts: [draft('/repo')], inSession: false })).toBe('');
   });
 });

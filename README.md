@@ -97,7 +97,7 @@ shows both keys, and how many drafts are parked in this repo. It fades after a
 few seconds.
 
 For a reminder that stays, Claude Code can show prompt-shelf in its status line
-(`⌁ 2 parked · ctrl+q`, or the keys when nothing is parked). Add this to
+(`prompt-shelf · 2 parked · ctrl+q`, or the keys when nothing is parked). Add this to
 `~/.claude/settings.json`:
 
 ```json

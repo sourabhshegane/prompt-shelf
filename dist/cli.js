@@ -955,9 +955,9 @@ var en = {
   "welcome.keys": "prompt-shelf on \xB7 {save} park \xB7 {list} list",
   "welcome.parked_one": "1 draft parked here",
   "welcome.parked_other": "{count} drafts parked here",
-  "statusline.parked_one": "\u2301 1 parked \xB7 {list}",
-  "statusline.parked_other": "\u2301 {count} parked \xB7 {list}",
-  "statusline.idle": "\u2301 stash \xB7 {save} park \xB7 {list} list",
+  "statusline.parked_one": "prompt-shelf \xB7 1 parked \xB7 {list}",
+  "statusline.parked_other": "prompt-shelf \xB7 {count} parked \xB7 {list}",
+  "statusline.idle": "prompt-shelf \xB7 {save} park \xB7 {list} list",
   // List panel
   "list.noSkillsFor": "no skills found for {agent} here",
   "list.emptyShelf": "{name} is empty \u2014 on the stash tab press s on a draft to save it here",
