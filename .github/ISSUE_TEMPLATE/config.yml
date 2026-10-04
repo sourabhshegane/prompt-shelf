@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Roadmap
+    url: https://github.com/sourabhshegane/prompt-shelf/blob/main/ROADMAP.md
+    about: What's planned. 👍 the linked issues you want most.

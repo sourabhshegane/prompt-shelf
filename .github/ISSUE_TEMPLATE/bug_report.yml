@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in prompt-shelf doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      placeholder: "Pressed Ctrl+F in Claude Code with a draft in the box; nothing was stashed."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `claude`
+        2. Type a prompt
+        3. Press Ctrl+F
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options: [Claude Code, Codex CLI, Both]
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `stash --version`, and `claude --version` or `codex --version`
+      placeholder: "prompt-shelf 0.2.0, Claude Code 2.1.289"
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal and OS
+      placeholder: "iTerm2 3.5 on macOS 15"
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `stash doctor`
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else (screenshots, debug log)
+      description: Run with `PROMPT_SHELF_DEBUG=1` to get a log; it records sizes and positions, never your prompt text.
